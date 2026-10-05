@@ -1,0 +1,16 @@
+{
+  "target_api": 36,
+  "min_api": 24,
+  "python_version": "3.11.9",
+  "archs": [
+    "arm64-v8a",
+    "armeabi-v7a"
+  ],
+  "artifact": "aab",
+  "pygame_version": "2.6.1",
+  "cython_version": "3.0.12",
+  "ndk_version": "28c",
+  "page_size_16k": true,
+  "checked_on": "2026-10-05",
+  "source": "Google Play target API 36 policy + Android 16 KB page-size guidance"
+}

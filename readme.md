@@ -1,5 +1,6 @@
 # JuprisX Pygame Agent — Android / Google Play 2026 Build Fix
-
+----------------
+fix-- trial- 06-10-2026
 ## What was broken
 
 The failing build was **not a normal host Cython problem**.

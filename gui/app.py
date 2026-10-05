@@ -369,11 +369,28 @@ class AppWindow(ctk.CTk if USE_CTK else ctk.Tk):
         except (InvalidTransition, ValueError) as exc:
             self.log_panel.log(f"Cannot build: {exc}")
             return
+        
         self.project_table.update_project(project)
         self.set_status("● Building")
         self.log_panel.log(f"Building {project['name']}...")
 
         def work():
+            import re
+            from pathlib import Path
+            from part1_builder.wsl_checker import run_in_wsl
+            
+            # 1. OTOMATIS HAPUS CACHE PYGAME LAMA VIA WSL
+            dir_name = Path(project["working_dir"]).name
+            slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", dir_name) or "project"
+            clean_cmd = f"rm -rf ~/.juprisx/build/{slug}/.buildozer/android/platform/build-*/build/other_builds/pygame*"
+            
+            try:
+                run_in_wsl(clean_cmd, timeout=30)
+                self.after(0, lambda: self.log_panel.log("[Auto-Clean] Cache pygame lama berhasil dibersihkan."))
+            except Exception as e:
+                self.after(0, lambda: self.log_panel.log(f"[Auto-Clean] Info: Gagal hapus cache ({e}), melanjutkan build..."))
+
+            # 2. LANJUTKAN BUILD NORMAL
             from part1_builder.compiler import CompilerPipeline
             return CompilerPipeline(project["working_dir"], self.pm.get_keystore(project),
                                     log=self._bg_log).run_compile()

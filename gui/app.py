@@ -385,11 +385,13 @@ class AppWindow(ctk.CTk if USE_CTK else ctk.Tk):
             clean_cmd = f"rm -rf ~/.juprisx/build/{slug}/.buildozer/android/platform/build-*/build/other_builds/pygame*"
             
             try:
-                run_in_wsl(clean_cmd, timeout=30)
-                self.after(0, lambda: self.log_panel.log("[Auto-Clean] Cache pygame lama berhasil dibersihkan."))
-            except Exception as e:
-                self.after(0, lambda: self.log_panel.log(f"[Auto-Clean] Info: Gagal hapus cache ({e}), melanjutkan build..."))
-
+                res = run_in_wsl(clean_cmd, timeout=30)
+                if res.returncode == 0:
+                    self._bg_log("[Auto-Clean] Cache pygame dibersihkan.")
+                else:
+                    self._bg_log(f"[Auto-Clean] Gagal: {res.stderr.strip()} (lanjut build)")
+            except Exception as exc:
+                self._bg_log(f"[Auto-Clean] Gagal: {exc} (lanjut build)")
             # 2. LANJUTKAN BUILD NORMAL
             from part1_builder.compiler import CompilerPipeline
             return CompilerPipeline(project["working_dir"], self.pm.get_keystore(project),

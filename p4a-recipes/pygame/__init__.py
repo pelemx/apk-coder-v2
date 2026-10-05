@@ -95,16 +95,18 @@ class JuprisXPygameRecipe(CompiledComponentsPythonRecipe):
 
             open("Setup", "w", encoding="utf-8").write(setup_file)
 
-    def get_recipe_env(self, arch):
-        env = super().get_recipe_env(arch)
+    def get_recipe_env(self, arch=None, **kwargs):
+        env = super().get_recipe_env(arch, **kwargs)
         env["USE_SDL2"] = "1"
         env["PYGAME_CROSS_COMPILE"] = "TRUE"
         env["PYGAME_ANDROID"] = "TRUE"
-        # Enable pygame's NEON-compatible path on ARM. The source itself
-        # guards the implementation with PG_ENABLE_ARM_NEON.
-        if arch.arch in ("arm64-v8a", "armeabi-v7a"):
-            env["CFLAGS"] = env.get("CFLAGS", "") + " -DPG_ENABLE_ARM_NEON=1"
-            env["CPPFLAGS"] = env.get("CPPFLAGS", "") + " -DPG_ENABLE_ARM_NEON=1"
+
+        if arch is not None and arch.arch in ("arm64-v8a", "armeabi-v7a"):
+            neon = " -DPG_ENABLE_ARM_NEON=1"
+            if arch.arch == "armeabi-v7a":
+                neon += " -mfpu=neon"
+            for key in ("CFLAGS", "CPPFLAGS", "CXXFLAGS"):
+                env[key] = env.get(key, "") + neon
         return env
 
 

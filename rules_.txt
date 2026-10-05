@@ -1,0 +1,81 @@
+Fase 1: Inisialisasi & Agentic Patching (Code Level)
+
+Load/Generate Project (1 menit): Ketik bikin game [nama game] di tab New Project untuk generate dari nol, ATAU klik tombol Attach Folder untuk memuat folder repo Pygame lokal hasil download.
+
+Inspeksi Builder (15 detik): Ketik scan project atau klik tombol Scan. Agen akan membaca source code dan membandingkannya dengan immutable rules dari Android Builder.
+
+Auto-Fix Loop (1-2 menit): Jika findings > 0 atau status needs_fix, ketik fix project atau klik Auto-fix (AI). Otak R9 akan menganalisa log dan menyusun surgical diff patch.
+
+Approve Patch (30 detik): Cek perubahan di panel Diff (Original -> Fixed). Klik Approve untuk menimpa file lokal, lalu scan project ulang sampai status menjadi ready_to_build (0 findings).
+
+Fase 2: Environment & Build (Compiler Level)
+
+Validasi WSL (2 menit): Ketik cek env. Jika indikator dependensi (Buildozer, JDK, Android SDK) MISSING, jalankan setup wsl untuk instalasi background.
+
+Kunci Rilis (1 menit): Ketik generate keystore. Masukkan password dan alias. File .jks ini wajib di-backup karena dipakai selamanya untuk update Play Store.
+
+Compile Package (5-10 menit): Ketik compile apk atau klik Build. Agen akan melempar source code dan keystore ke Buildozer untuk dieksekusi menjadi file .apk atau .aab.
+
+Fase 3: Visual & Publishing (Store Level)
+
+Buka Asset Engine (10 detik): Klik tombol Play Store Assets di pojok kanan atas atau ketik bikin icon.
+
+Generate Prompt (2 menit): Masukkan deskripsi visual game. API Bridge (Port 4333) akan mengeksekusi image generation untuk Icon 512x512 dan Feature Graphic 1024x500.
+
+Simpan Metadata (30 detik): Klik Save pada preview gambar yang sukses di-render. File siap di-zip bersama .aab untuk diunggah ke Google Play Console.
+
+Status: Workflow pipeline tercatat penuh dari raw code hingga production assets.
+Langkah Selanjutnya: Jalankan setup wsl di terminal UI sekarang untuk menuntaskan sisa error validasi environment (1/6) pada project yang sedang idle.
+
+==
+
+wajib pake 
+wsl bash -c "source ~/.juprisx/venv/bin/activate && pip install cython==3.0.12"
+
+wsl bash -c "source ~/.juprisx/venv/bin/activate && pip uninstall -y wheel setuptools packaging"
+
+
+Cause -> Buildozer mencoba menginstal dependency Python-for-Android (p4a) menggunakan parameter --user di dalam sebuah Virtual Environment (venv) WSL lu. Konfigurasi bawaan pip secara tegas menolak instalasi dengan flag --user jika ia mendeteksi sedang berada di dalam isolated venv, karena itu akan merusak struktur pathing isolasinya.
+Fix -> Hapus parameter --user dari konfigurasi pip atau biarkan venv punya akses ke system site-packages.
+
+Ini bug klasik Buildozer versi lama saat berjalan di WSL venv. Lakukan bypass paksa ini lewat Terminal/CMD Windows lu (bukan di UI JuprisX):
+
+Buka CMD/Terminal Windows.
+
+Jalankan perintah ini untuk masuk ke environment WSL dan memaksa pip di dalam venv lu mengabaikan restriksi user-site:
+wsl bash -c "export PIP_USER=false && source ~/.juprisx/venv/bin/activate && pip install appdirs colorama jinja2 sh meson ninja build toml packaging setuptools wheel"
+
+(Opsional tapi disarankan) Jalankan juga perintah pembaruan p4a agar tidak pakai versi lama yang bentrok:
+wsl bash -c "source ~/.juprisx/venv/bin/activate && pip install --upgrade cython==3.0.12 virtualenv"
+
+Tutup CMD.
+----------
+hapus cache wsl
+an-sederhana$ ls
+bin  buildozer.spec  main.py  playstore_assets  release.jks
+saharx@SRI-REJEKI:~/.juprisx/build/matematika-tebak-angka-penjumlahan-sederhana$ source ~/.juprisx/venv/bin/activate
+(venv) saharx@SRI-REJEKI:~/.juprisx/build/matematika-tebak-angka-penjumlahan-sederhana$ source ~/.juprisx/venv/bin/activate
+(venv) saharx@SRI-REJEKI:~/.juprisx/build/matematika-tebak-angka-penjumlahan-sederhana$ buildozer android clean
+# Ensure build layout
+# Check configuration tokens
+# Run '/home/saharx/.juprisx/venv/bin/python3 -m pythonforandroid.toolchain clean_builds --color=always --storage-dir=/home/saharx/.juprisx/build/matematika-tebak-angka-penjumlahan-sederhana/.buildozer/android/platform/build-arm64-v8a_armeabi-v7a --ndk-api=24 --ignore-setup-py --debug' ...
+# Cwd /home/saharx/.juprisx/build/matematika-tebak-angka-penjumlahan-sederhana/.buildozer/android/platform/python-for-android
+[WARNING]: prerequisites.py is experimental and does not support all prerequisites yet.
+[WARNING]: Please report any issues to the python-for-android issue tracker.
+[WARNING]: prerequisites.py is experimental and does not support all prerequisites yet.
+[WARNING]: Please report any issues to the python-for-android issue tracker.
+[DEBUG]:   Remove directory and subdirectory /home/saharx/.juprisx/build/matematika-tebak-angka-penjumlahan-sederhana/.buildozer/android/platform/build-arm64-v8a_armeabi-v7a/build
+[DEBUG]:   Create directory /home/saharx/.juprisx/build/matematika-tebak-angka-penjumlahan-sederhana/.buildozer/android/platform/build-arm64-v8a_armeabi-v7a/build/python-installs
+[DEBUG]:   Remove directory and subdirectory /home/saharx/.juprisx/build/matematika-tebak-angka-penjumlahan-sederhana/.buildozer/android/platform/build-arm64-v8a_armeabi-v7a/build/python-installs
+# Run '/home/saharx/.juprisx/venv/bin/python3 -m pythonforandroid.toolchain clean_dists --color=always --storage-dir=/home/saharx/.juprisx/build/matematika-tebak-angka-penjumlahan-sederhana/.buildozer/android/platform/build-arm64-v8a_armeabi-v7a --ndk-api=24 --ignore-setup-py --debug' ...
+# Cwd /home/saharx/.juprisx/build/matematika-tebak-angka-penjumlahan-sederhana/.buildozer/android/platform/python-for-android
+[WARNING]: prerequisites.py is experimental and does not support all prerequisites yet.
+[WARNING]: Please report any issues to the python-for-android issue tracker.
+[WARNING]: prerequisites.py is experimental and does not support all prerequisites yet.
+[WARNING]: Please report any issues to the python-for-android issue tracker.
+[DEBUG]:   Remove directory and subdirectory /home/saharx/.juprisx/build/matematika-tebak-angka-penjumlahan-sederhana/.buildozer/android/platform/build-arm64-v8a_armeabi-v7a/dists
+(venv) saharx@SRI-REJEKI:~/.juprisx/build/matematika-tebak-angka-penjumlahan-sederhana$
+
+-----------
+
+enforced["p4a.local_recipes"] = "./p4a-recipes"

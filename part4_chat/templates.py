@@ -1,132 +1,56 @@
-"""
-Offline project templates used when the MCP server is unreachable.
-ANDROID-SAFE: No SCALED, no if __name__, direct main() call.
-"""
+"""Offline HTML5/JS/CSS project templates used when MCP is unavailable."""
 from __future__ import annotations
 
-COLOR_GAME = '''"""{title} - color guessing game (touch / mouse)."""
-import random
-from pathlib import Path
-import pygame
-
-BASE_DIR = Path(__file__).resolve().parent
-WIDTH, HEIGHT = 480, 800
-FPS = 60
-
-COLORS = {{
-    "MERAH": (231, 76, 60),
-    "BIRU": (52, 152, 219),
-    "HIJAU": (46, 204, 113),
-    "KUNING": (241, 196, 15),
-    "UNGU": (155, 89, 182),
-    "ORANYE": (230, 126, 34),
-}}
-
-def new_round():
-    names = random.sample(list(COLORS), 4)
-    answer = random.choice(names)
-    return names, answer
-
-def main():
-    pygame.init()
-    # NO SCALED FLAG - Android handles scaling natively
-    screen = pygame.display.set_mode((WIDTH, HEIGHT))
-    pygame.display.set_caption("{title}")
-    clock = pygame.time.Clock()
-    
-    font_big = pygame.font.Font(None, 64)
-    font = pygame.font.Font(None, 40)
-    score, lives = 0, 3
-    names, answer = new_round()
-    buttons = [pygame.Rect(40, 380 + i * 90, WIDTH - 80, 70) for i in range(4)]
-    
-    running = True
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            # Handle Android Back Button
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                running = False
-            elif event.type == pygame.MOUSEBUTTONDOWN:
-                if lives <= 0:
-                    score, lives = 0, 3
-                    names, answer = new_round()
-                    continue
-                for rect, name in zip(buttons, names):
-                    if rect.collidepoint(event.pos):
-                        if name == answer:
-                            score += 1
-                        else:
-                            lives -= 1
-                        names, answer = new_round()
-                        break
-        screen.fill((24, 26, 33))
-        title = font.render("Tebak warna kotak ini:", True, (240, 240, 240))
-        screen.blit(title, title.get_rect(center=(WIDTH // 2, 60)))
-        pygame.draw.rect(screen, COLORS[answer], (90, 110, WIDTH - 180, 220), border_radius=24)
-        for rect, name in zip(buttons, names):
-            pygame.draw.rect(screen, (60, 64, 78), rect, border_radius=16)
-            label = font.render(name, True, (255, 255, 255))
-            screen.blit(label, label.get_rect(center=rect.center))
-        hud = font.render(f"Skor {{score}}   Nyawa {{lives}}", True, (240, 240, 240))
-        screen.blit(hud, (40, HEIGHT - 70))
-        if lives <= 0:
-            over = font_big.render("GAME OVER", True, (231, 76, 60))
-            screen.blit(over, over.get_rect(center=(WIDTH // 2, HEIGHT // 2)))
-            tap = font.render("Tap untuk main lagi", True, (240, 240, 240))
-            screen.blit(tap, tap.get_rect(center=(WIDTH // 2, HEIGHT // 2 + 50)))
-        pygame.display.flip()
-        clock.tick(FPS)
-    pygame.quit()
-
-# CALL MAIN DIRECTLY - NO if __name__ == "__main__"
-main()
-'''
-
-SKELETON = '''"""{title} - Pygame skeleton (Android Safe)."""
-from pathlib import Path
-import pygame
-
-BASE_DIR = Path(__file__).resolve().parent
-ASSETS_DIR = BASE_DIR / "assets"
-WIDTH, HEIGHT = 480, 800
-FPS = 60
-
-def main():
-    pygame.init()
-    # NO SCALED FLAG
-    screen = pygame.display.set_mode((WIDTH, HEIGHT))
-    pygame.display.set_caption("{title}")
-    clock = pygame.time.Clock()
-    font = pygame.font.Font(None, 48)
-    
-    running = True
-    while running:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            # Handle Android Back Button
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                running = False
-        screen.fill((24, 26, 33))
-        text = font.render("{title}", True, (240, 240, 240))
-        screen.blit(text, text.get_rect(center=(WIDTH // 2, HEIGHT // 2)))
-        pygame.display.flip()
-        clock.tick(FPS)
-    pygame.quit()
-
-# CALL MAIN DIRECTLY
-main()
-'''
 
 def build_template(name: str) -> dict[str, str]:
-    """Return {relative_path: content} for a starter project."""
-    title = (name or "Pygame Game").strip().title()
-    title = title.replace('"', ' ').replace('\\', ' ')
-    tpl = COLOR_GAME if "warna" in name.lower() or "color" in name.lower() else SKELETON
-    return {
-        "main.py": tpl.format(title=title),
-        "requirements.txt": "pygame\n",
-        "assets/.gitkeep": "",
-    }
+    """Return a complete offline-first HTML5 starter project."""
+    title = (name or "HTML5 Game").strip().title()
+    safe = title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    html = f'''<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#181a21">
+<title>{safe}</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="app" aria-label="{safe}">
+<section class="card">
+<h1>{safe}</h1>
+<p id="question">Tap Start untuk mulai.</p>
+<div id="answers" class="answers"></div>
+<button id="start" type="button">Start</button>
+<p id="score">Skor: 0</p>
+</section>
+</main>
+<script src="app.js" defer></script>
+</body>
+</html>
+'''
+    js = '''(() => {
+"use strict";
+const $ = id => document.getElementById(id);
+const question = $("question"), answers = $("answers"), start = $("start"), scoreEl = $("score");
+let score = 0, answer = 0;
+function nextRound() {
+  const a = Math.floor(Math.random() * 20) + 1, b = Math.floor(Math.random() * 20) + 1;
+  answer = a + b; question.textContent = `${a} + ${b} = ?`; answers.replaceChildren();
+  const options = new Set([answer]);
+  while (options.size < 4) options.add(Math.max(0, answer + Math.floor(Math.random() * 11) - 5));
+  [...options].sort(() => Math.random() - 0.5).forEach(value => {
+    const button = document.createElement("button"); button.type = "button"; button.className = "answer"; button.textContent = String(value);
+    button.addEventListener("click", () => { if (Number(value) === answer) score++; scoreEl.textContent = `Skor: ${score}`; nextRound(); }, {passive:true});
+    answers.appendChild(button);
+  });
+}
+start.addEventListener("click", () => { score = 0; scoreEl.textContent = "Skor: 0"; start.hidden = true; nextRound(); }, {passive:true});
+window.addEventListener("popstate", () => {});
+})();
+'''
+    css = '''*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html,body{margin:0;min-height:100%;background:#181a21;color:#fff}body{min-height:100dvh;overflow:hidden;font-family:system-ui,sans-serif;user-select:none}#app{min-height:100dvh;display:grid;place-items:center;padding:20px}.card{width:min(92vw,520px);padding:24px;border-radius:24px;background:#242833;text-align:center}h1{font-size:clamp(24px,7vw,42px)}button{min-height:52px;border:0;border-radius:14px;padding:12px 20px;font-size:18px;font-weight:700;touch-action:manipulation}.answers{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:20px 0}.answer{background:#3b4252;color:#fff}#start{width:100%;background:#5b8cff;color:#fff}#score{font-weight:700}
+'''
+    import json
+    manifest = json.dumps({"name": title, "short_name": title[:30], "start_url": "./index.html", "display": "standalone", "background_color": "#181a21", "theme_color": "#181a21"}, ensure_ascii=False, indent=2) + "\n"
+    return {"index.html": html, "app.js": js, "style.css": css, "manifest.json": manifest, "assets/.gitkeep": ""}

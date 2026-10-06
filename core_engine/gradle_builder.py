@@ -127,7 +127,7 @@ class GradleBuilder:
         if artifact in {"aab", "both"}: tasks.append(("aab", "bundleRelease"))
         if not tasks:
             raise ValueError(f"Unsupported artifact: {artifact}")
-        env_setup = self._wsl_toolchain() + f"cd -- {self._quote(wsl_dir)}; if [ ! -x ./gradlew ]; then gradle wrapper --gradle-version {self.GRADLE_VERSION}; fi; "
+        env_setup = self._wsl_toolchain() + f"cd -- {self._quote(wsl_dir)}; printf 'sdk.dir=%s\\n' "$ANDROID_SDK_ROOT" > local.properties; if [ ! -x ./gradlew ]; then gradle wrapper --gradle-version {self.GRADLE_VERSION}; fi; "
         outputs = {}
         for kind, task in tasks:
             self.log(f"[WSL/gradle] {task}")

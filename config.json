@@ -1,9 +1,9 @@
 {
-  "mcp_url": "http://100.118.242.120:3333",
-  "mcp_api_key": "sharxkayara99milyar",
+  "mcp_url": "",
+  "mcp_api_key": "",
   "mcp_timeout_chat": 80,
   "mcp_timeout_generate": 190,
-  "assets_api_url": "http://100.118.242.120:4333",
-  "assets_api_key": "Sahar_Sec_9921_X",
+  "assets_api_url": "",
+  "assets_api_key": "",
   "assets_timeout": 120
 }

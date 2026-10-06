@@ -29,7 +29,8 @@ class CompilerPipeline:
         if not (web / "index.html").exists():
             raise FileNotFoundError(f"Missing web entry point: {web / 'index.html'}")
         www = android / "app" / "src" / "main" / "assets" / "www"
-        if www.exists(): shutil.rmtree(www)
+        if www.exists():
+            shutil.rmtree(www)
         shutil.copytree(web, www)
 
         manifest = web / "manifest.json"
@@ -43,16 +44,17 @@ class CompilerPipeline:
         return {"android": str(android), "web_assets": str(www), "application_id": package, "app_name": app_name}
 
     def _write_signing_properties(self, ks: dict) -> None:
-        if not ks.get("path") or not ks.get("alias") or not ks.get("store_password") or not ks.get("key_password"):
+        required = ("path", "alias", "store_password", "key_password")
+        if not all(ks.get(k) for k in required):
             raise ValueError("Complete signing information is required for a release build.")
         signing = self.project_dir / "signing"
         signing.mkdir(parents=True, exist_ok=True)
         target = signing / "signing.properties"
         target.write_text(
-            "storeFile=" + str(Path(ks["path"]).resolve()) + "\n" +
-            "storePassword=" + ks["store_password"] + "\n" +
-            "keyAlias=" + ks["alias"] + "\n" +
-            "keyPassword=" + ks["key_password"] + "\n",
+            "storeFile=" + str(Path(ks["path"]).resolve()).replace("\\", "/") + "\n"
+            + "storePassword=" + ks["store_password"] + "\n"
+            + "keyAlias=" + ks["alias"] + "\n"
+            + "keyPassword=" + ks["key_password"] + "\n",
             encoding="utf-8",
         )
 
@@ -66,16 +68,20 @@ class CompilerPipeline:
         try:
             android_info = self.prepare_android_project()
             ks = self.keystore_info
-            if not ks.get("path"):
+            if not ks.get("path") or not ks.get("store_password") or not Path(ks["path"]).exists():
                 ks = KeystoreManager(str(self.project_dir)).ensure()
             self._write_signing_properties(ks)
             outputs = GradleBuilder(str(self.project_dir), log=self.log).build(artifact)
-            return {"status": "success", "apk": outputs.get("apk"), "aab": outputs.get("aab"), "keystore": ks.get("path"), "android": android_info, "validation": validation}
+            return {"status": "success", "apk": outputs.get("apk"), "aab": outputs.get("aab"),
+                    "keystore": ks.get("path"), "android": android_info, "validation": validation}
         except Exception as exc:
             return {"status": "error", "message": str(exc), "validation": validation}
 
-    def run_compile_apk(self): return self.run_compile("apk")
-    def run_compile_aab(self): return self.run_compile("aab")
+    def run_compile_apk(self):
+        return self.run_compile("apk")
+
+    def run_compile_aab(self):
+        return self.run_compile("aab")
 
     def prepare_buildozer_spec(self):
         return {"status": "deprecated", "message": "Buildozer/p4a is disabled for HTML/JS projects."}

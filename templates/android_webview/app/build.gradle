@@ -1,0 +1,38 @@
+plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android' }
+
+android {
+    namespace 'com.juprisx.container'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'com.juprisx.generated'
+        minSdk 35
+        targetSdk 36
+        versionCode 1
+        versionName '1.0.0'
+    }
+
+    buildTypes {
+        release { minifyEnabled false }
+    }
+
+    signingConfigs {
+        release {
+            def props = rootProject.file('../signing/signing.properties')
+            if (props.exists()) {
+                def p = new Properties(); props.withInputStream { p.load(it) }
+                storeFile rootProject.file('../signing/' + new File(p.storeFile).name)
+                storePassword p.storePassword
+                keyAlias p.keyAlias
+                keyPassword p.keyPassword
+            }
+        }
+    }
+
+    buildTypes.release.signingConfig signingConfigs.release
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.17.0'
+    implementation 'androidx.webkit:webkit:1.14.0'
+}

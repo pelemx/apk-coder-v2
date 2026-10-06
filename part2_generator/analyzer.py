@@ -1,33 +1,18 @@
 from __future__ import annotations
 
-import ast
-import os
+import json
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 
-from .common import (
-    EXCLUDES as DEFAULT_EXCLUDES, import_aliases, is_excluded, iter_string_constants,
-    looks_like_unix_absolute_path, looks_like_windows_absolute_path, resolve_call_name,
-)
-
-WINDOWS_ONLY_MODULES = {"winsound", "msvcrt", "_winreg", "winreg", "pythoncom", "pywintypes", "wmi", "comtypes"}
-
-# Signals that a game adapts to the device screen instead of fixing a desktop window size.
-DISPLAY_ADAPTIVE_CALLS = {
-    "pygame.display.Info", "pygame.display.get_desktop_sizes", "pygame.display.get_window_size",
-}
-
-SOURCE_EXTENSIONS = {".py"}
-CONFIG_FILES = {
-    "requirements.txt", "pyproject.toml", "setup.py",
-    "setup.cfg", "buildozer.spec",
-}
+EXCLUDED = {".git", ".juprisx", "node_modules", "dist", "build", "__pycache__", "venv", ".venv"}
+TEXT_EXTENSIONS = {".html", ".js", ".css", ".json"}
 
 
 class Analyzer:
-    """Static analyzer for Pygame projects against the immutable Builder contract."""
+    """Static analyzer for the immutable JuprisX HTML/JS Android WebView contract."""
 
     def __init__(self, project_path: str, builder_contract: dict[str, Any] | None = None):
         self.project_path = Path(project_path).expanduser().resolve()
@@ -36,233 +21,107 @@ class Analyzer:
     @staticmethod
     def default_builder_contract() -> dict[str, Any]:
         return {
-            "name": "JuprisX Pygame Builder",
-            "version": "1.0",
-            "runtime": {"os": "WSL", "python": "fixed", "pygame": "fixed"},
-            "filesystem": {
-                "working_directory": "project_root",
-                "windows_absolute_paths": False,
-                "case_sensitive": True,
-            },
-            "pygame": {
-                "display": "builder_managed",
-                "resolution": "builder_managed",
-                "font_system": "bundled_fonts",
-                "audio": "builder_managed",
-            },
+            "name": "JuprisX HTML/JS Android Builder",
+            "version": "2.0",
+            "runtime": {"android": True, "webview": True, "offline_first": True},
+            "entry": "web/index.html",
             "rules": [
-                "Do not modify builder",
-                "Do not require Windows-only APIs",
-                "Do not assume host-installed fonts",
-                "Do not use hardcoded absolute paths",
-                "Use project-relative assets",
+                "No Python/Pygame runtime in generated app",
+                "No CDN or remote runtime dependencies",
+                "No absolute desktop paths",
+                "Use relative local assets",
+                "Use mobile viewport and touch/pointer input",
             ],
         }
 
     def analyze(self) -> dict[str, Any]:
         findings: list[dict[str, Any]] = []
-        files_scanned = 0
-
         if not self.project_path.exists():
-            return {
-                "status": "error",
-                "findings": [{
-                    "severity": "HIGH",
-                    "code": "PROJECT_NOT_FOUND",
-                    "file": str(self.project_path),
-                    "line": 0,
-                    "message": "Project directory does not exist.",
-                }],
-                "files_scanned": 0,
-            }
-
-        for path in self._iter_project_files():
+            return {"status": "error", "files_scanned": 0, "findings": [self._finding("HIGH", "PROJECT_NOT_FOUND", self.project_path, 0, "Project directory does not exist.")]}
+        web = self.project_path / "web"
+        if not web.exists():
+            web = self.project_path
+        index = web / "index.html"
+        if not index.exists():
+            findings.append(self._finding("HIGH", "MISSING_ENTRY", index, 0, "Required web/index.html entry point is missing.", "Create web/index.html."))
+        files_scanned = 0
+        for path in web.rglob("*"):
+            if not path.is_file() or any(part in EXCLUDED for part in path.relative_to(web).parts):
+                continue
+            if path.suffix.lower() not in TEXT_EXTENSIONS:
+                continue
             files_scanned += 1
-            if path.suffix == ".py":
-                findings.extend(self._analyze_python_file(path))
-            elif path.name == "requirements.txt":
-                findings.extend(self._analyze_requirements(path))
-            elif path.name == "buildozer.spec":
-                findings.extend(self._analyze_buildozer(path))
+            if path.suffix.lower() == ".html":
+                findings.extend(self._analyze_html(path, web))
+            elif path.suffix.lower() == ".js":
+                findings.extend(self._analyze_js(path, web))
+            elif path.suffix.lower() == ".css":
+                findings.extend(self._analyze_css(path, web))
+            elif path.name == "manifest.json":
+                findings.extend(self._analyze_manifest(path))
+        return {"status": "analyzed", "files_scanned": files_scanned, "findings": findings}
 
-        return {
-            "status": "analyzed",
-            "files_scanned": files_scanned,
-            "findings": findings,
-        }
-
-    def _iter_project_files(self):
-        for path in self.project_path.rglob("*"):
-            if not path.is_file():
-                continue
-            if is_excluded(path.relative_to(self.project_path).parts):
-                continue
-            if path.suffix in SOURCE_EXTENSIONS or path.name in CONFIG_FILES:
-                yield path
-
-    def _analyze_python_file(self, path: Path) -> list[dict[str, Any]]:
+    def _analyze_html(self, path: Path, web: Path) -> list[dict[str, Any]]:
+        source = path.read_text(encoding="utf-8", errors="replace")
         findings: list[dict[str, Any]] = []
-        try:
-            source = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            findings.append(self._finding("MED", "NON_UTF8_SOURCE", path, 0,
-                                          "Python source is not UTF-8; scanner skipped AST analysis."))
-            return findings
-
-        try:
-            tree = ast.parse(source, filename=str(path))
-        except SyntaxError as exc:
-            findings.append(self._finding(
-                "HIGH", "PYTHON_SYNTAX_ERROR", path, exc.lineno or 0,
-                f"Python syntax error: {exc.msg}",
-            ))
-            return findings
-
-        aliases = import_aliases(tree)
-        display_calls: list[ast.Call] = []
-        adaptive = False
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                name = resolve_call_name(node.func, aliases)
-                if name == "pygame.font.SysFont":
-                    findings.append(self._finding(
-                        "HIGH", "HOST_DEPENDENT_FONT", path, node.lineno,
-                        "pygame.font.SysFont() can depend on host-installed fonts. "
-                        "Builder contract requires bundled fonts.",
-                        "Use pygame.font.Font() with a project-relative bundled font.",
-                    ))
-                elif name == "pygame.display.set_mode":
-                    display_calls.append(node)
-                elif name in DISPLAY_ADAPTIVE_CALLS:
-                    adaptive = True
-
-        # Display is builder-managed: only a project that hardcodes a window size and does
-        # nothing to adapt to the device screen is a finding.
-        if self.builder_contract.get("pygame", {}).get("display") == "builder_managed":
-            for call in display_calls:
-                if not adaptive and self._hardcodes_display(call, aliases):
-                    findings.append(self._finding(
-                        "MED", "BUILDER_MANAGED_DISPLAY", path, call.lineno,
-                        "set_mode() uses a fixed window size and the file does not adapt to the "
-                        "device resolution.",
-                        "Use size (0, 0) to let Android handle scaling natively, or derive the size from "
-                        "pygame.display.Info(). CRITICAL: NEVER use pygame.SCALED.", # <--- SUDAH AMAN
-                    ))
-
-        for node, value in iter_string_constants(tree):
-            line = getattr(node, "lineno", 0)
-            if looks_like_windows_absolute_path(value):
-                findings.append(self._finding(
-                    "HIGH", "WINDOWS_ABSOLUTE_PATH", path, line,
-                    f"Hardcoded Windows absolute path found: {value}",
-                    "Use pathlib and a project-relative path.",
-                ))
-            elif looks_like_unix_absolute_path(value):
-                findings.append(self._finding(
-                    "MED", "ABSOLUTE_PATH", path, line,
-                    f"Hardcoded absolute path found: {value}",
-                    "Use a project-relative path derived from the project root.",
-                ))
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    if self._is_windows_only_module(alias.name):
-                        findings.append(self._finding(
-                            "HIGH", "WINDOWS_ONLY_IMPORT", path, node.lineno,
-                            f"Windows-only dependency imported: {alias.name}",
-                            "Replace it with a cross-platform/WSL-compatible implementation.",
-                        ))
-            elif isinstance(node, ast.ImportFrom) and node.level == 0:
-                if self._is_windows_only_module(node.module or ""):
-                    findings.append(self._finding(
-                        "HIGH", "WINDOWS_ONLY_IMPORT", path, node.lineno,
-                        f"Windows-only dependency imported: {node.module}",
-                        "Replace it with a cross-platform/WSL-compatible implementation.",
-                    ))
-
+        if path.name == "index.html":
+            low = source.lower()
+            if "meta" not in low or not re.search(r'<meta[^>]+name=["\']viewport["\']', source, re.I):
+                findings.append(self._finding("HIGH", "MISSING_VIEWPORT", path, 1, "Mobile viewport meta tag is missing.", "Add a responsive viewport meta tag."))
+        for line_no, line in enumerate(source.splitlines(), 1):
+            for match in re.finditer(r'(?:src|href)=["\']([^"\']+)', line, re.I):
+                findings.extend(self._check_reference(path, web, match.group(1), line_no))
+            if re.search(r'<script[^>]+src=["\']https?://', line, re.I):
+                findings.append(self._finding("HIGH", "REMOTE_SCRIPT", path, line_no, "External script/CDN dependency detected.", "Bundle the script locally."))
         return findings
+
+    def _analyze_js(self, path: Path, web: Path) -> list[dict[str, Any]]:
+        source = path.read_text(encoding="utf-8", errors="replace")
+        findings: list[dict[str, Any]] = []
+        if re.search(r'(?<![A-Za-z])(?:file://|https?://)', source, re.I):
+            findings.append(self._finding("HIGH", "REMOTE_OR_FILE_URL", path, 1, "Runtime URL dependency detected.", "Use local relative assets."))
+        for line_no, line in enumerate(source.splitlines(), 1):
+            for match in re.finditer(r'(?:fetch|import|from)\s*\(?["\']([^"\']+)', line, re.I):
+                findings.extend(self._check_reference(path, web, match.group(1), line_no))
+        return findings
+
+    def _analyze_css(self, path: Path, web: Path) -> list[dict[str, Any]]:
+        findings: list[dict[str, Any]] = []
+        source = path.read_text(encoding="utf-8", errors="replace")
+        for line_no, line in enumerate(source.splitlines(), 1):
+            for match in re.finditer(r'url\(\s*["\']?([^\)"\']+)', line, re.I):
+                findings.extend(self._check_reference(path, web, match.group(1).strip(), line_no))
+        return findings
+
+    def _check_reference(self, path: Path, web: Path, ref: str, line: int) -> list[dict[str, Any]]:
+        parsed = urlparse(ref)
+        if parsed.scheme in {"http", "https"}:
+            return [self._finding("HIGH", "REMOTE_DEPENDENCY", path, line, f"Remote dependency: {ref}", "Bundle the dependency locally.")]
+        if parsed.scheme == "file" or ref.startswith("/") or re.match(r"^[A-Za-z]:[\\/]", ref):
+            return [self._finding("HIGH", "ABSOLUTE_ASSET_PATH", path, line, f"Absolute/desktop path: {ref}", "Use a project-relative path.")]
+        if ref.startswith(("#", "data:", "blob:", "javascript:")):
+            return []
+        clean = ref.split("?", 1)[0].split("#", 1)[0]
+        target = (path.parent / clean).resolve()
+        if not target.is_file():
+            return [self._finding("HIGH", "BROKEN_ASSET", path, line, f"Local resource not found: {ref}", "Generate or add the missing asset.")]
+        return []
 
     @staticmethod
-    def _is_windows_only_module(name: str) -> bool:
-        root = name.split(".")[0]
-        return root in WINDOWS_ONLY_MODULES or root.startswith("win32")
-
-    @staticmethod
-    def _hardcodes_display(call: ast.Call, aliases: dict[str, str]) -> bool:
-        size = call.args[0] if call.args else next((k.value for k in call.keywords if k.arg == "size"), None)
-        flags = call.args[1] if len(call.args) > 1 else next((k.value for k in call.keywords if k.arg == "flags"), None)
-        
-        # FIX: Wajibkan FULLSCREEN, tolak SCALED
-        if flags is not None:
-            for sub in ast.walk(flags):
-                if isinstance(sub, (ast.Attribute, ast.Name)):
-                    leaf = sub.attr if isinstance(sub, ast.Attribute) else sub.id
-                    # Jika pakai FULLSCREEN dan ukurannya (0, 0), berarti lolos (False)
-                    if leaf == "FULLSCREEN" and _is_zero_size(size):
-                        return False
-                        
-        if _is_zero_size(size):
-            return False
-        if size is None:
-            return False
-            
-        if isinstance(size, (ast.Tuple, ast.List)):
-            return True
-        return isinstance(size, ast.Name) and size.id.isupper()
-
-    def _analyze_requirements(self, path: Path) -> list[dict[str, Any]]:
-        findings = []
+    def _analyze_manifest(path: Path) -> list[dict[str, Any]]:
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except UnicodeDecodeError:
-            return [self._finding("MED", "NON_UTF8_REQUIREMENTS", path, 0,
-                                   "requirements.txt is not UTF-8.")]
-        for idx, raw in enumerate(lines, 1):
-            line = raw.strip().lower()
-            if not line or line.startswith("#"):
-                continue
-            if line.startswith(("pywin32", "pywin32-")):
-                findings.append(self._finding(
-                    "HIGH", "WINDOWS_ONLY_DEPENDENCY", path, idx,
-                    f"Windows-only dependency detected: {raw.strip()}",
-                    "Remove or replace it with a WSL/Linux-compatible dependency.",
-                ))
-        return findings
-
-    def _analyze_buildozer(self, path: Path) -> list[dict[str, Any]]:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            return [Analyzer._finding("HIGH", "MANIFEST_JSON", path, exc.lineno or 0, "manifest.json is invalid JSON.")]
         findings = []
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            return [self._finding("MED", "NON_UTF8_BUILDOZER", path, 0,
-                                   "buildozer.spec is not UTF-8.")]
-        if "source.include_exts" not in text:
-            findings.append(self._finding(
-                "LOW", "BUILDOZER_EXTENSIONS_UNDECLARED", path, 0,
-                "buildozer.spec does not declare source.include_exts.",
-                "Declare the file extensions/assets required by the project.",
-            ))
+        for key in ("name", "short_name", "start_url"):
+            if not data.get(key):
+                findings.append(Analyzer._finding("MED", "MANIFEST_FIELD", path, 1, f"Missing manifest field: {key}"))
         return findings
-
-
-
 
     @staticmethod
     def _finding(severity, code, path, line, message, recommendation=None):
-        item = {
-            "severity": severity,
-            "code": code,
-            "file": str(path),
-            "line": line,
-            "message": message,
-        }
+        item = {"severity": severity, "code": code, "file": str(path), "line": line, "message": message}
         if recommendation:
             item["recommended_action"] = recommendation
         return item
-
-
-def _is_zero_size(node) -> bool:
-    return (isinstance(node, (ast.Tuple, ast.List)) and len(node.elts) == 2
-            and all(isinstance(e, ast.Constant) and e.value == 0 for e in node.elts))

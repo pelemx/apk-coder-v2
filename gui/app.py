@@ -405,7 +405,7 @@ class AppWindow(ctk.CTk if USE_CTK else ctk.Tk):
         self.after(0, lambda: self.log_panel.log(line))
 
     def setup_environment(self):
-        """Self-heal the WSL build environment (apt packages + Buildozer venv)."""
+        """Explicit-only environment setup; never called by keystore/build."""
         self.set_status("● Setting up WSL")
         self._notify("Menyiapkan WSL build environment...")
 

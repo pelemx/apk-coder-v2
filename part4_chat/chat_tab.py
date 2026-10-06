@@ -121,9 +121,6 @@ class ChatTab:
     def _worker(self, message: str):
         try: reply = self.engine.handle(message)
         except Exception as exc: reply = Reply(f"Error: {exc}")
-        # Keep the originating prompt attached to the reply. This prevents a
-        # stale/queued action (especially setup_env) from being executed after
-        # a different user command such as "generate keystore".
         self._queue.put((reply, message))
 
     def _ping_bg(self): self.engine.ping(); self._queue.put(None)
@@ -140,13 +137,20 @@ class ChatTab:
         self.frame.after(100, self._poll)
 
     def _action_matches_prompt(self, reply: Reply, source_prompt: str) -> bool:
-        """Reject an action if it does not belong to the prompt that created it."""
-        if not reply.action:
+        """Strictly bind executable actions to the originating user command."""
+        p = source_prompt.lower().strip()
+
+        # Keystore is a terminal user action. Never allow an environment/setup
+        # action to execute for the same request, even if the intent detector
+        # or an older queued reply misclassifies it.
+        if re.search(r"\b(gen(?:erate)?|create|buat|bikin|siapkan|prepare)\b[^\n]*(?:keystore|\.jks|\.keystore)\b", p):
+            if reply.action != "keystore":
+                self.receive_message(f"[guard] Ignored '{reply.action}' after keystore request.")
+                return False
             return True
+
         detected = self.engine.detect_action(source_prompt)
-        expected = {
-            "generate_game": "create_project",
-        }.get(detected, detected)
+        expected = {"generate_game": "create_project"}.get(detected, detected)
         if reply.action != expected:
             self.receive_message(f"[guard] Ignored stale action '{reply.action}' for prompt '{source_prompt}'.")
             return False

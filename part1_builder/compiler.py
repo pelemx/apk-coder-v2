@@ -49,9 +49,15 @@ class CompilerPipeline:
             raise ValueError("Complete signing information is required for a release build.")
         signing = self.project_dir / "signing"
         signing.mkdir(parents=True, exist_ok=True)
+        source = Path(ks["path"]).resolve()
+        if not source.exists():
+            raise FileNotFoundError(f"Keystore not found: {source}")
+        target_ks = signing / source.name
+        if source != target_ks:
+            shutil.copy2(source, target_ks)
         target = signing / "signing.properties"
         target.write_text(
-            "storeFile=" + str(Path(ks["path"]).resolve()).replace("\\", "/") + "\n"
+            "storeFile=" + target_ks.name + "\n"
             + "storePassword=" + ks["store_password"] + "\n"
             + "keyAlias=" + ks["alias"] + "\n"
             + "keyPassword=" + ks["key_password"] + "\n",

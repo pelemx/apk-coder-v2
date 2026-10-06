@@ -18,33 +18,51 @@ class KeystoreManager:
 
     @staticmethod
     def _find_keytool() -> str:
-        java_home = os.environ.get("JAVA_HOME")
-        if java_home:
-            p = Path(java_home) / "bin" / ("keytool.exe" if os.name == "nt" else "keytool")
-            if p.is_file():
-                return str(p)
+        """Locate keytool without requiring Buildozer or a separate Python toolchain."""
+        candidates: list[Path] = []
+        for env_name in ("JAVA_HOME", "JDK_HOME"):
+            value = os.environ.get(env_name)
+            if value:
+                root = Path(value)
+                candidates.extend([
+                    root / "bin" / ("keytool.exe" if os.name == "nt" else "keytool"),
+                    root / "jre" / "bin" / ("keytool.exe" if os.name == "nt" else "keytool"),
+                ])
+
+        if os.name == "nt":
+            local = Path(os.environ.get("LOCALAPPDATA", ""))
+            pf = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+            pfx86 = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+            candidates.extend([
+                pf / "Android" / "Android Studio" / "jbr" / "bin" / "keytool.exe",
+                pfx86 / "Android" / "Android Studio" / "jbr" / "bin" / "keytool.exe",
+                local / "Programs" / "Android Studio" / "jbr" / "bin" / "keytool.exe",
+                pf / "Java" / "jdk-17" / "bin" / "keytool.exe",
+                pf / "Java" / "jdk-21" / "bin" / "keytool.exe",
+                pfx86 / "Java" / "jdk-17" / "bin" / "keytool.exe",
+                pfx86 / "Java" / "jdk-21" / "bin" / "keytool.exe",
+            ])
+            # Android Studio/JDK installations can use arbitrary version directories.
+            for root in (pf / "Android" / "Android Studio", pf / "Java", pfx86 / "Java", local / "Programs" / "Android Studio"):
+                if root.exists():
+                    candidates.extend(root.glob("**/bin/keytool.exe"))
+        else:
+            for root in (Path("/usr/lib/jvm"), Path("/opt/java"), Path("/opt/android-studio/jbr")):
+                if root.exists():
+                    candidates.extend(root.glob("**/bin/keytool"))
+
+        for candidate in candidates:
+            if candidate.is_file():
+                return str(candidate.resolve())
+
         for name in ("keytool.exe", "keytool"):
             found = shutil.which(name)
             if found:
                 return found
-        if os.name == "nt":
-            roots = [
-                Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Java",
-                Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Android" / "Android Studio" / "jbr",
-                Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Android Studio" / "jbr",
-            ]
-            for root in roots:
-                if root.exists():
-                    matches = list(root.glob("**/bin/keytool.exe"))
-                    if matches:
-                        return str(sorted(matches)[-1])
-        else:
-            for root in (Path("/usr/lib/jvm"), Path("/opt/java"), Path("/opt/android-studio/jbr")):
-                if root.exists():
-                    matches = list(root.glob("**/bin/keytool"))
-                    if matches:
-                        return str(sorted(matches)[-1])
-        raise FileNotFoundError("Java keytool was not found. Install a JDK/Android Studio or set JAVA_HOME.")
+
+        raise FileNotFoundError(
+            "Java keytool was not found. Set JAVA_HOME/JDK_HOME or install a JDK/Android Studio."
+        )
 
     def ensure(self, alias: str | None = None, password: str | None = None) -> dict:
         alias = alias or self._slug(self.root.name)
@@ -59,21 +77,34 @@ class KeystoreManager:
         key_password = os.environ.get("JX_KEY_PASSWORD") or password
         keytool = self._find_keytool()
         env = {**os.environ, "JX_STORE_PASS": password, "JX_KEY_PASS": key_password}
-        cmd = [keytool, "-genkeypair", "-v", "-keystore", str(self.keystore), "-alias", alias,
-               "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
-               "-storepass:env", "JX_STORE_PASS", "-keypass:env", "JX_KEY_PASS",
-               "-dname", "CN=JuprisX, OU=Apps, O=JuprisX, C=ID"]
-        proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        cmd = [
+            keytool, "-genkeypair", "-v",
+            "-keystore", str(self.keystore),
+            "-alias", alias,
+            "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
+            "-storepass:env", "JX_STORE_PASS",
+            "-keypass:env", "JX_KEY_PASS",
+            "-dname", "CN=JuprisX, OU=Apps, O=JuprisX, C=ID",
+        ]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, env=env, check=False)
+        except FileNotFoundError as exc:
+            raise RuntimeError(f"Unable to execute keytool: {keytool}") from exc
         if proc.returncode != 0 or not self.keystore.exists():
             raise RuntimeError((proc.stderr or proc.stdout).strip() or "keytool failed")
+
         self.properties.write_text(
             f"storeFile={self.keystore.resolve()}\nstorePassword={password}\n"
             f"keyAlias={alias}\nkeyPassword={key_password}\n",
             encoding="utf-8",
         )
-        return {"path": str(self.keystore), "alias": alias,
-                "store_password": password, "key_password": key_password,
-                "properties": str(self.properties)}
+        return {
+            "path": str(self.keystore),
+            "alias": alias,
+            "store_password": password,
+            "key_password": key_password,
+            "properties": str(self.properties),
+        }
 
     def _read_properties(self) -> dict:
         values = {}

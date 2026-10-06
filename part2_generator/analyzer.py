@@ -146,8 +146,8 @@ class Analyzer:
                         "MED", "BUILDER_MANAGED_DISPLAY", path, call.lineno,
                         "set_mode() uses a fixed window size and the file does not adapt to the "
                         "device resolution.",
-                        "Pass pygame.SCALED (or size (0, 0)) to set_mode, or derive the size from "
-                        "pygame.display.Info().",
+                        "Use size (0, 0) to let Android handle scaling natively, or derive the size from "
+                        "pygame.display.Info(). CRITICAL: NEVER use pygame.SCALED.", # <--- SUDAH AMAN
                     ))
 
         for node, value in iter_string_constants(tree):
@@ -191,20 +191,23 @@ class Analyzer:
 
     @staticmethod
     def _hardcodes_display(call: ast.Call, aliases: dict[str, str]) -> bool:
-        """True if set_mode gets a fixed size and no scaling/native-size signal."""
         size = call.args[0] if call.args else next((k.value for k in call.keywords if k.arg == "size"), None)
         flags = call.args[1] if len(call.args) > 1 else next((k.value for k in call.keywords if k.arg == "flags"), None)
+        
+        # FIX: Wajibkan FULLSCREEN, tolak SCALED
         if flags is not None:
             for sub in ast.walk(flags):
                 if isinstance(sub, (ast.Attribute, ast.Name)):
                     leaf = sub.attr if isinstance(sub, ast.Attribute) else sub.id
-                    if leaf in {"SCALED", "FULLSCREEN"} and (leaf == "SCALED" or _is_zero_size(size)):
+                    # Jika pakai FULLSCREEN dan ukurannya (0, 0), berarti lolos (False)
+                    if leaf == "FULLSCREEN" and _is_zero_size(size):
                         return False
+                        
         if _is_zero_size(size):
             return False
         if size is None:
-            return False  # nothing hardcoded (e.g. size comes from **kwargs)
-        # Literal (w, h), or names/attributes like (WIDTH, HEIGHT): a fixed desktop-style size.
+            return False
+            
         if isinstance(size, (ast.Tuple, ast.List)):
             return True
         return isinstance(size, ast.Name) and size.id.isupper()

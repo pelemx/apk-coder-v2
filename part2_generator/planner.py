@@ -33,7 +33,10 @@ class Planner:
         "ABSOLUTE_PATH": "Replace the absolute path with a project-relative path.",
         "WINDOWS_ONLY_IMPORT": "Replace the Windows-only API with a WSL/Linux-compatible implementation.",
         "WINDOWS_ONLY_DEPENDENCY": "Remove or replace the Windows-only dependency.",
-        "BUILDER_MANAGED_DISPLAY": "Make set_mode adapt to the device screen (pygame.SCALED or size (0, 0)).",
+        
+        # PERBAIKAN: Hapus saran pygame.SCALED karena bikin crash di Android
+        "BUILDER_MANAGED_DISPLAY": "Make set_mode adapt to the device screen by using size (0, 0) or querying pygame.display.Info(). CRITICAL: NEVER use pygame.SCALED, it crashes on Android.",
+        
         "PYTHON_SYNTAX_ERROR": "Repair the syntax error before any other source modification.",
         "BUILDOZER_EXTENSIONS_UNDECLARED": "Add the required project asset/source extensions to buildozer.spec.",
     }

@@ -83,9 +83,15 @@ class ContextManager:
         ctx: dict[str, Any] = {
             "mode": self.mode,
             "working_dir": self.active_working_dir,
+            # ATURAN PAKSAAN UNTUK ANDROID PYGAME
             "builder_rules": [
-                "No Windows-only APIs", "No host-installed fonts (no SysFont)",
-                "No hardcoded absolute paths", "Use project-relative assets",
+                "CRITICAL: NEVER use pygame.SCALED. Use pygame.display.set_mode((WIDTH, HEIGHT)) only.",
+                "CRITICAL: NEVER use 'if __name__ == \"__main__\":'. Call main() directly at the end of the file.",
+                "No Windows-only APIs", 
+                "No host-installed fonts (no SysFont, use pygame.font.Font(None, size))",
+                "No hardcoded absolute paths", 
+                "Use project-relative assets",
+                "Handle android back button: if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE: running = False",
                 "Do not modify the builder",
             ],
         }

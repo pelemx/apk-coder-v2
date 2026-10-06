@@ -375,27 +375,20 @@ class AppWindow(ctk.CTk if USE_CTK else ctk.Tk):
         self.log_panel.log(f"Building {project['name']}...")
 
         def work():
-            import re
-            from pathlib import Path
-            from part1_builder.wsl_checker import run_in_wsl
-            
-            # 1. OTOMATIS HAPUS CACHE PYGAME LAMA VIA WSL
-            dir_name = Path(project["working_dir"]).name
-            slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", dir_name) or "project"
-            clean_cmd = f"rm -rf ~/.juprisx/build/{slug}/.buildozer/android/platform/build-*/build/other_builds/pygame*"
-            
-            try:
-                res = run_in_wsl(clean_cmd, timeout=30)
-                if res.returncode == 0:
-                    self._bg_log("[Auto-Clean] Cache pygame dibersihkan.")
-                else:
-                    self._bg_log(f"[Auto-Clean] Gagal: {res.stderr.strip()} (lanjut build)")
-            except Exception as exc:
-                self._bg_log(f"[Auto-Clean] Gagal: {exc} (lanjut build)")
-            # 2. LANJUTKAN BUILD NORMAL
             from part1_builder.compiler import CompilerPipeline
-            return CompilerPipeline(project["working_dir"], self.pm.get_keystore(project),
-                                    log=self._bg_log).run_compile()
+            from part1_builder.wsl_connector import get_safe_keystore_path
+            
+            # 1. PERBAIKAN PATH KEYSTORE (Mencegah /mnt/d/mnt/d/...)
+            # Gunakan 'or {}' untuk mencegah error jika project belum punya keystore
+            ks = dict(self.pm.get_keystore(project) or {})
+            if ks.get("path"):
+                safe_path = get_safe_keystore_path(ks["path"])
+                if safe_path != ks["path"]:
+                    self._bg_log(f"[WSL Connector] Keystore dipindahkan ke path aman Linux: {safe_path}")
+                    ks["path"] = safe_path
+
+            # 2. LANJUTKAN BUILD DENGAN KEYSTORE YANG SUDAH AMAN
+            return CompilerPipeline(project["working_dir"], ks, log=self._bg_log).run_compile()
 
         def done(result, error):
             self.set_status("● Idle")
@@ -406,7 +399,7 @@ class AppWindow(ctk.CTk if USE_CTK else ctk.Tk):
             self.log_panel.log(f"Build {result['status']}: {result.get('message', '')}")
 
         self._run_bg(work, done)
-
+        
     def _bg_log(self, line: str):
         """Thread-safe logging for background workers."""
         self.after(0, lambda: self.log_panel.log(line))

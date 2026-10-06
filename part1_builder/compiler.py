@@ -75,7 +75,7 @@ class CompilerPipeline:
             "requirements": f"hostpython3=={policy.get('python_version', '3.11.9')},python3=={policy.get('python_version', '3.11.9')},pygame=={policy['pygame_version']}",
             "p4a.local_recipes": f"/home/{os.environ.get('LOGNAME', 'saharx')}/.juprisx/build/{_slug(root.name)}/p4a-recipes",
             "android.ndk_api": str(policy["min_api"]),
-            "p4a.env_vars": "CFLAGS=-mfpu=neon -mfloat-abi=softfp"
+            # BARIS BERBAHAYA SUDAH HILANG DI SINI!
         }
         # Never build a source tree that leaks our own metadata/build output into the package.
         excludes = "bin, .buildozer, .juprisx, .git, __pycache__"

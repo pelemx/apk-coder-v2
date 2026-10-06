@@ -1,8 +1,8 @@
-"""WSL bridge + build-environment checker.
+"""WSL/Linux bridge and Android Gradle build-environment checker.
 
-The desktop app runs on Windows; builds run inside WSL. Everything that touches the
-build environment goes through run_in_wsl(), so the app, the validator and the agent
-all agree on one definition of "the build environment".
+The desktop app may run on Windows while Android builds run in WSL/Linux. This
+module contains only generic environment/command transport; it has no Pygame,
+Buildozer, or python-for-android dependency.
 """
 from __future__ import annotations
 
@@ -12,15 +12,10 @@ import shlex
 import subprocess
 from typing import Any
 
-# Apt packages Buildozer / python-for-android need on Ubuntu/Debian WSL distros.
 APT_PACKAGES = [
     "build-essential", "git", "zip", "unzip", "openjdk-17-jdk", "python3-pip",
-    "python3-venv", "autoconf", "automake", "libtool", "pkg-config", "cmake",
-    "rsync", "zlib1g-dev", "libncurses-dev", "libffi-dev", "libssl-dev", "libltdl-dev",
+    "python3-venv", "curl", "wget", "unzip", "rsync",
 ]
-VENV_DIR = "$HOME/.juprisx/venv"
-BUILDOZER_BIN = f"{VENV_DIR}/bin/buildozer"
-PIP_PACKAGES = ["buildozer", "cython==3.0.12", "virtualenv", "pygame"]
 
 
 def host_is_windows() -> bool:
@@ -28,7 +23,6 @@ def host_is_windows() -> bool:
 
 
 def inside_wsl() -> bool:
-    """True when THIS process runs inside WSL (not the normal case for the GUI)."""
     if platform.system() != "Linux":
         return False
     release = platform.uname().release.lower()
@@ -36,7 +30,6 @@ def inside_wsl() -> bool:
 
 
 def _decode(data: bytes) -> str:
-    # wsl.exe management commands (-l, --status) print UTF-16LE.
     if b"\x00" in data:
         return data.decode("utf-16-le", errors="replace").replace("\x00", "")
     return data.decode("utf-8", errors="replace")
@@ -54,11 +47,6 @@ def _wsl_base(distro: str | None = None, as_root: bool = False) -> list[str]:
 def run_in_wsl(command: str, cwd: str | None = None, timeout: int | None = 600,
                extra_env: dict[str, str] | None = None, as_root: bool = False,
                distro: str | None = None) -> subprocess.CompletedProcess:
-    """Run a bash command in the build environment. cwd is a Linux path (see to_wsl_path).
-
-    extra_env values are passed through WSLENV on Windows, so secrets (keystore passwords)
-    never appear on a command line.
-    """
     if cwd:
         command = f"cd {shlex.quote(cwd)} && {command}"
     env = os.environ.copy()
@@ -66,20 +54,17 @@ def run_in_wsl(command: str, cwd: str | None = None, timeout: int | None = 600,
         env.update(extra_env)
     if host_is_windows():
         if extra_env:
-            names = [n for n in extra_env]
-            env["WSLENV"] = ":".join([env.get("WSLENV", "")] + names).strip(":")
+            env["WSLENV"] = ":".join([env.get("WSLENV", "")] + list(extra_env)).strip(":")
         argv = _wsl_base(distro, as_root) + [command]
     else:
         argv = ["bash", "-lc", command]
     proc = subprocess.run(argv, capture_output=True, env=env, timeout=timeout)
-    return subprocess.CompletedProcess(
-        argv, proc.returncode, _decode(proc.stdout), _decode(proc.stderr))
+    return subprocess.CompletedProcess(argv, proc.returncode, _decode(proc.stdout), _decode(proc.stderr))
 
 
 def stream_in_wsl(command: str, on_line=lambda line: None, cwd: str | None = None,
                   extra_env: dict[str, str] | None = None, distro: str | None = None,
                   timeout: int | None = 7200) -> int:
-    """Like run_in_wsl but forwards output line by line (long builds). Returns exit code."""
     import time
     if cwd:
         command = f"cd {shlex.quote(cwd)} && {command}"
@@ -99,13 +84,12 @@ def stream_in_wsl(command: str, on_line=lambda line: None, cwd: str | None = Non
         on_line(raw.decode("utf-8", errors="replace").rstrip())
         if timeout and time.time() - start > timeout:
             proc.kill()
-            on_line("[build] timed out, process killed")
+            on_line("[gradle] timed out, process killed")
             break
     return proc.wait()
 
 
 def to_wsl_path(path: str) -> str:
-    """C:\\Users\\me\\game -> /mnt/c/Users/me/game (no subprocess needed, deterministic)."""
     p = str(path)
     if not host_is_windows():
         return p
@@ -113,13 +97,12 @@ def to_wsl_path(path: str) -> str:
     if len(p) >= 2 and p[1] == ":":
         return f"/mnt/{p[0].lower()}{p[2:]}"
     if p.startswith("//wsl.localhost/") or p.startswith("//wsl$/"):
-        parts = p.split("/", 4)  # '', '', host, distro, rest
+        parts = p.split("/", 4)
         return "/" + (parts[4] if len(parts) > 4 else "")
     return p
 
 
 def wsl_available() -> bool:
-    """Is a usable build environment reachable from this process?"""
     if not host_is_windows():
         return True
     try:
@@ -138,17 +121,19 @@ def _probe(command: str, **kw) -> tuple[bool, str]:
 
 
 def check_wsl_environment(distro: str | None = None) -> dict[str, Any]:
-    """Check the BUILD environment (WSL when the app runs on Windows)."""
+    """Check JDK, Gradle and Android SDK availability for native WebView builds."""
     status: dict[str, Any] = {
-        "is_wsl": False, "mode": "unavailable", "python_version": "",
-        "pygame_installed": False, "jdk_available": False, "android_sdk": False,
-        "buildozer_available": False, "missing_apt": [], "ready": False, "errors": [],
+        "is_wsl": False,
+        "mode": "unavailable",
+        "python_version": "",
+        "jdk_available": False,
+        "gradle_available": False,
+        "android_sdk": False,
+        "ready": False,
+        "errors": [],
     }
-
     if host_is_windows() and not wsl_available():
-        status["errors"].append(
-            "WSL not found. Install it with 'wsl --install -d Ubuntu' (admin PowerShell), "
-            "reboot, then reopen the app.")
+        status["errors"].append("WSL is unavailable. Install/enable WSL and an Ubuntu distro.")
         return status
 
     ok, kernel = _probe("uname -r", distro=distro)
@@ -157,72 +142,51 @@ def check_wsl_environment(distro: str | None = None) -> dict[str, Any]:
         return status
     low = kernel.lower()
     status["is_wsl"] = "microsoft" in low or "wsl" in low
-    status["mode"] = ("windows+wsl" if host_is_windows() else "wsl" if status["is_wsl"] else "linux")
-    if not status["is_wsl"] and host_is_windows():
-        status["errors"].append("The selected distro is not a WSL kernel.")
+    status["mode"] = "windows+wsl" if host_is_windows() else ("wsl" if status["is_wsl"] else "linux")
 
     ok, out = _probe("python3 --version", distro=distro)
     status["python_version"] = out.replace("Python", "").strip() if ok else ""
-    if not ok:
-        status["errors"].append("python3 missing in build environment.")
 
-    status["pygame_installed"], _ = _probe(
-        f"{VENV_DIR}/bin/python -c 'import pygame' || python3 -c 'import pygame'", distro=distro)
-    status["cython_installed"], _ = _probe(
-        f"{VENV_DIR}/bin/python -c 'import Cython' || python3 -c 'import Cython'", distro=distro)
     status["jdk_available"], _ = _probe("javac -version && keytool -help >/dev/null", distro=distro)
-    if not status["jdk_available"]:
-        status["errors"].append("JDK (javac/keytool) missing in build environment.")
-    status["buildozer_available"], _ = _probe(
-        f"test -x {BUILDOZER_BIN} || command -v buildozer", distro=distro)
-    if not status["buildozer_available"]:
-        status["errors"].append("Buildozer missing in build environment.")
-    # SDK is downloaded by Buildozer on first build; report whether it already exists.
+    status["gradle_available"], _ = _probe("command -v gradle >/dev/null || test -x ./gradlew", distro=distro)
     status["android_sdk"], _ = _probe(
-        'test -d "${ANDROID_HOME:-$HOME/.buildozer/android/platform/android-sdk}"', distro=distro)
+        'test -d "${ANDROID_HOME:-$ANDROID_SDK_ROOT}" || test -d "$HOME/Android/Sdk"', distro=distro)
 
-    ok, out = _probe("dpkg -s " + " ".join(APT_PACKAGES) + " 2>&1 | grep -c 'install ok installed'",
-                     distro=distro)
-    if ok and out.isdigit() and int(out) < len(APT_PACKAGES):
-        r = run_in_wsl("for p in " + " ".join(APT_PACKAGES) +
-                       "; do dpkg -s $p >/dev/null 2>&1 || echo $p; done", distro=distro)
-        status["missing_apt"] = r.stdout.split()
+    if not status["jdk_available"]:
+        status["errors"].append("JDK 17 (javac/keytool) is missing.")
+    if not status["gradle_available"]:
+        status["errors"].append("Gradle is missing. A generated project may use its gradle wrapper when present.")
+    if not status["android_sdk"]:
+        status["errors"].append("Android SDK is not detected.")
 
-    # pygame is only needed for local testing, the APK is built from project sources.
-    status["ready"] = bool(status["python_version"] and status["jdk_available"]
-                           and status["buildozer_available"] and not status["missing_apt"]
-                           and (status["is_wsl"] or status["mode"] == "linux"))
+    status["ready"] = bool(status["jdk_available"] and status["gradle_available"] and status["android_sdk"])
     return status
 
 
 def setup_commands(status: dict[str, Any]) -> list[dict[str, Any]]:
-    """Ordered, idempotent repair steps for whatever check_wsl_environment found missing.
-    The agent/coder runs these (apt as root via wsl -u root, so no sudo password prompt)."""
     steps: list[dict[str, Any]] = []
-    if status.get("missing_apt") or not status.get("jdk_available"):
-        pkgs = " ".join(status.get("missing_apt") or APT_PACKAGES)
-        steps.append({"name": "apt packages", "as_root": True, "timeout": 1800,
-                      "command": f"apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y {pkgs}"})
-    if not status.get("buildozer_available") or not status.get("pygame_installed") or not status.get("cython_installed"):
-        steps.append({"name": "python venv (buildozer, cython, pygame)", "as_root": False, "timeout": 1800,
-                      "command": f"(test -x {VENV_DIR}/bin/python || python3 -m venv {VENV_DIR}) && "
-                                 f"export PIP_USER=false && " # <--- TAMBAHKAN INI
-                                 f"{VENV_DIR}/bin/pip install --upgrade pip " + " ".join(PIP_PACKAGES)})
+    if not status.get("jdk_available"):
+        steps.append({
+            "name": "Android/JDK prerequisites", "as_root": True, "timeout": 1800,
+            "command": "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y " + " ".join(APT_PACKAGES),
+        })
+    if not status.get("gradle_available"):
+        steps.append({
+            "name": "Gradle check", "as_root": False, "timeout": 120,
+            "command": "command -v gradle >/dev/null || echo 'Gradle wrapper is expected inside the generated Android project.'",
+        })
     return steps
 
 
 def apply_setup(status: dict[str, Any] | None = None, distro: str | None = None,
                 log=lambda line: None) -> dict[str, Any]:
-    """Run the repair steps, then re-check. Returns the fresh status plus a step log."""
     status = status or check_wsl_environment(distro)
     results = []
     for step in setup_commands(status):
         log(f"[setup] {step['name']}...")
         try:
-            r = run_in_wsl(step["command"], timeout=step["timeout"],
-                           as_root=step["as_root"], distro=distro)
-            results.append({"step": step["name"], "returncode": r.returncode,
-                            "tail": (r.stdout + r.stderr)[-1500:]})
+            r = run_in_wsl(step["command"], timeout=step["timeout"], as_root=step["as_root"], distro=distro)
+            results.append({"step": step["name"], "returncode": r.returncode, "tail": (r.stdout + r.stderr)[-1500:]})
         except (OSError, subprocess.SubprocessError) as exc:
             results.append({"step": step["name"], "returncode": -1, "tail": str(exc)})
     invalidate_cache()
@@ -235,7 +199,6 @@ _CACHE: dict[str, Any] = {"at": 0.0, "status": None}
 
 
 def cached_check(ttl: float = 30.0, force: bool = False) -> dict[str, Any]:
-    """check_wsl_environment() spawns several wsl.exe processes; reuse a recent result."""
     import time
     now = time.time()
     if force or _CACHE["status"] is None or now - _CACHE["at"] > ttl:

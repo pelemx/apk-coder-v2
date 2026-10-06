@@ -4,7 +4,7 @@ android {
     namespace 'com.juprisx.container'
     compileSdk 36
     defaultConfig {
-        applicationId 'com.juprisx.generated'
+        applicationId '__APPLICATION_ID__'
         minSdk 35
         targetSdk 36
         versionCode 1

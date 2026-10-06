@@ -10,9 +10,9 @@ class WebHybridEngine(HybridEngine):
     WEB_CONTRACT = """Generate an Android-ready offline-first web application.
 STRICTLY use HTML5, CSS and JavaScript (Canvas/Phaser allowed when bundled locally).
 Do NOT generate Python, Pygame, pygame-ce, SDL2, Buildozer or python-for-android.
-Entry point must be index.html at project root. All dependencies/assets must be local
-relative files; never use CDN/http resources. Include a mobile viewport meta tag and
-touch-friendly controls. Return JSON {files:[{path,content}]}.
+Entry point must be web/index.html. All dependencies/assets must be local relative files;
+never use CDN/http resources. Include a mobile viewport meta tag and touch-friendly controls.
+Return JSON {files:[{path,content}]} using paths under web/.
 """
 
     @staticmethod
@@ -27,45 +27,36 @@ touch-friendly controls. Return JSON {files:[{path,content}]}.
         return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "html5-app"
 
     def _do_generate(self, prompt: str) -> Reply:
-        name = self.extract_game_name(prompt)
-        files, source = {}, "template lokal"
-        text = self._call_mcp(self.WEB_CONTRACT + "\nUser request:\n" + prompt,
-                              "ask_guidance", timeout=self.cfg["mcp_timeout_generate"], include_sources=False)
+        name = self.extract_game_name(prompt); files, source = {}, "template lokal"
+        text = self._call_mcp(self.WEB_CONTRACT + "\nUser request:\n" + prompt, "ask_guidance", timeout=self.cfg["mcp_timeout_generate"], include_sources=False)
         if text:
-            files = {k: v for k, v in self.parse_files(text).items()
-                     if not k.lower().endswith((".py", ".pyw"))}
-            if "index.html" in files:
-                source = "MCP / Jupris"
-            else:
-                files = {}
-        if not files:
-            files = build_template(name)
-        return Reply(
-            f"Web app **{name}** siap ({source}). File: {', '.join(sorted(files))}.\nMau simpan di folder mana? Pilih folder, atau ketik *simpan di default*.",
-            action="create_project",
-            data={"name": name.title(), "slug": self._slug_web(name), "files": files, "source": source},
-        )
+            parsed = self.parse_files(text)
+            files = {k if k.startswith("web/") else "web/" + k: v for k, v in parsed.items() if not k.lower().endswith((".py", ".pyw"))}
+            if "web/index.html" in files: source = "MCP / Jupris"
+            else: files = {}
+        if not files: files = build_template(name)
+        return Reply(f"Web app **{name}** siap ({source}). File: {', '.join(sorted(files))}.\nMau simpan di folder mana? Pilih folder, atau ketik *simpan di default*.", action="create_project", data={"name": name.title(), "slug": self._slug_web(name), "files": files, "source": source})
+
+    def make_fix_provider(self):
+        def provider(prompt: str) -> dict:
+            text = self._call_mcp(self.WEB_CONTRACT + "\nFix only these findings:\n" + prompt, "request_patch", timeout=self.cfg["mcp_timeout_generate"], include_sources=True)
+            if not text: return {}
+            return {k if k.startswith("web/") else "web/" + k: v for k, v in self.parse_files(text).items() if not k.lower().endswith((".py", ".pyw"))}
+        return provider
 
     def _do_check_env(self, _prompt: str) -> Reply:
         from part1_builder.wsl_checker import check_wsl_environment
-        env = check_wsl_environment()
-        mark = lambda ok: "OK" if ok else "MISSING"
-        return Reply("\n".join([
-            "**Android Web build environment** (Windows-native Gradle)",
-            f"- JDK/keytool: {mark(env.get('jdk_available'))}",
-            f"- Gradle: {mark(env.get('gradle_available'))}",
-            f"- Android SDK: {mark(env.get('android_sdk'))}",
-            "- Buildozer: NOT USED",
-            "- Pygame: NOT USED",
-        ]))
+        env = check_wsl_environment(); mark = lambda ok: "OK" if ok else "MISSING"
+        return Reply("\n".join(["**Android Web build environment** (native Gradle)", f"- JDK/keytool: {mark(env.get('jdk_available'))}", f"- Gradle: {mark(env.get('gradle_available'))}", f"- Android SDK: {mark(env.get('android_sdk'))}", "- Buildozer: NOT USED", "- Pygame: NOT USED"]))
 
     def _do_setup_env(self, _prompt: str) -> Reply:
         return Reply("Checking native Android build environment (JDK, Android SDK, Gradle, keytool).", action="setup_env")
 
+    def _do_fix(self, prompt: str) -> Reply:
+        if (r := self._need_project()): return r
+        findings = self.ctx.project.get("findings", []) if self.ctx.project else []
+        if not findings: return Reply("Tidak ada findings. Jalankan scan project dulu.")
+        return Reply("Menyiapkan web-only patch untuk findings project. Perubahan akan masuk Reviewer.", action="auto_fix")
+
     def _help_text(self) -> str:
-        return ("**JuprisX Web App Builder**\n\n"
-                "- Generate: `make simple game math` / `bikin game tebak warna`\n"
-                "- Scan: `scan project`\n- Auto-fix: `auto fix`\n"
-                "- Keystore: `generate keystore`\n- Build: `compile apk` / `build aab`\n"
-                "- Assets: `generate icon`\n- Environment: `cek env`\n\n"
-                "Generated apps use HTML5 + CSS + JavaScript inside the native Android WebView container.")
+        return ("**JuprisX Web App Builder**\n\n- Generate: `make simple game math` / `bikin game tebak warna`\n- Scan: `scan project`\n- Auto-fix: `auto fix`\n- Keystore: `generate keystore`\n- Build: `compile apk` / `build aab`\n- Assets: `generate icon`\n- Environment: `cek env`\n\nGenerated apps use HTML5 + CSS + JavaScript inside the native Android WebView container.")

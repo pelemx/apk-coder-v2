@@ -58,6 +58,30 @@ class GradleBuilder:
             raise RuntimeError("WSL fallback requires the project to be on a Windows drive.")
         return f"/mnt/{win[0].lower()}/{win[2:].lstrip('/')}"
 
+    def _wsl_toolchain(self) -> str:
+        """Return a minimal Linux toolchain bootstrap command.
+
+        The command deliberately avoids inheriting the huge Windows PATH from WSL.
+        """
+        gradle_root = f"$HOME/.juprisx/tools/gradle-{self.GRADLE_VERSION}"
+        return (
+            "set -e; "
+            "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; "
+            "if ! command -v java >/dev/null 2>&1; then "
+            "sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openjdk-21-jdk unzip curl; "
+            "fi; "
+            "if [ ! -x " + gradle_root + "/bin/gradle ]; then "
+            "mkdir -p $HOME/.juprisx/tools; "
+            f"curl -fsSL https://services.gradle.org/distributions/gradle-{self.GRADLE_VERSION}-bin.zip -o $HOME/.juprisx/tools/gradle.zip; "
+            "rm -rf $HOME/.juprisx/tools/gradle-*; "
+            "unzip -q $HOME/.juprisx/tools/gradle.zip -d $HOME/.juprisx/tools; "
+            "rm -f $HOME/.juprisx/tools/gradle.zip; "
+            "fi; "
+            f"export PATH={gradle_root}/bin:$PATH; "
+            "export JAVA_HOME=${JAVA_HOME:-$(dirname $(dirname $(readlink -f $(command -v java))))}; "
+            "export ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}; "
+        )
+
     def _ensure_wrapper(self) -> Path | str | None:
         bat = self.android_dir / "gradlew.bat"
         unix = self.android_dir / "gradlew"
@@ -75,18 +99,8 @@ class GradleBuilder:
             try:
                 from part1_builder.wsl_connector import run_command
                 wsl_dir = self._wsl_dir()
-                bootstrap = (
-                    "set -e; "
-                    "if ! command -v gradle >/dev/null 2>&1; then "
-                    "mkdir -p ~/.juprisx/tools; "
-                    f"cd ~/.juprisx/tools; "
-                    f"if [ ! -x gradle-{self.GRADLE_VERSION}/bin/gradle ]; then "
-                    f"curl -fsSL https://services.gradle.org/distributions/gradle-{self.GRADLE_VERSION}-bin.zip -o gradle.zip; "
-                    "rm -rf gradle-*; unzip -q gradle.zip; rm -f gradle.zip; fi; "
-                    f"export PATH=$HOME/.juprisx/tools/gradle-{self.GRADLE_VERSION}/bin:$PATH; fi; "
-                    f"cd {self._quote(wsl_dir)}; gradle wrapper --gradle-version {self.GRADLE_VERSION}"
-                )
-                rc, out, err = run_command(bootstrap, timeout=300)
+                script = self._wsl_toolchain() + "cd -- \"$1\"; gradle wrapper --gradle-version " + self.GRADLE_VERSION
+                rc, out, err = run_command(script, args=[wsl_dir], timeout=900)
                 if rc == 0 and unix.exists():
                     self.log("[gradle] wrapper generated through WSL")
                     return unix
@@ -104,18 +118,11 @@ class GradleBuilder:
         if not tasks:
             raise ValueError(f"Unsupported artifact: {artifact}")
         gradle_root = f"$HOME/.juprisx/tools/gradle-{self.GRADLE_VERSION}"
-        env_setup = (
-            "set -e; "
-            f"export PATH={gradle_root}/bin:$PATH; "
-            "export JAVA_HOME=${JAVA_HOME:-$(dirname $(dirname $(readlink -f $(command -v java))))}; "
-            "export ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}; "
-            f"cd {self._quote(wsl_dir)}; "
-            "if [ ! -x ./gradlew ]; then gradle wrapper --gradle-version " + self.GRADLE_VERSION + "; fi; "
-        )
+        env_setup = self._wsl_toolchain() + f"cd -- \"$1\"; if [ ! -x ./gradlew ]; then gradle wrapper --gradle-version {self.GRADLE_VERSION}; fi; "
         outputs = {}
         for kind, task in tasks:
             self.log(f"[WSL/gradle] {task}")
-            rc, out, err = run_command(env_setup + f"./gradlew {task}", timeout=1800)
+            rc, out, err = run_command(env_setup + f"./gradlew {task}", args=[wsl_dir], timeout=1800)
             if rc != 0:
                 raise RuntimeError(f"WSL Gradle {task} failed:\n{out[-4000:]}\n{err[-4000:]}")
             ext = "apk" if kind == "apk" else "aab"

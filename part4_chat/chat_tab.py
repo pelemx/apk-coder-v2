@@ -1,9 +1,8 @@
 """
-Chat Tab - context-aware chat for the JuprisX agent.
+Chat Tab - context-aware chat for the JuprisX web-to-Android agent.
 
-UI only. Language understanding lives in HybridEngine, project state in
-ContextManager, and every real action (scan / keystore / build / create /
-stage patch) goes through the `ChatServices` callbacks supplied by the app.
+UI only. Language understanding lives in WebHybridEngine, project state in
+ContextManager, and real actions go through ChatServices callbacks supplied by the app.
 """
 from __future__ import annotations
 
@@ -22,19 +21,16 @@ except ImportError:
     USE_CTK = False
 
 from part4_chat.context_manager import MODES, ContextManager
-from part4_chat.hybrid_engine import HybridEngine, Reply
+from part4_chat.web_hybrid_engine import WebHybridEngine, Reply
 
 
 @dataclass
 class ChatServices:
-    """Callbacks the app provides. All optional; missing ones are reported in chat."""
     scan: Optional[Callable[[], None]] = None
     keystore: Optional[Callable[[], None]] = None
     build: Optional[Callable[[], None]] = None
     stage_edits: Optional[Callable[[list], None]] = None
-    # (name, folder, files) -> project dict ; raises on failure
     create_project: Optional[Callable[[str, str, dict], dict]] = None
-    # folder -> project dict (import an existing folder as a project)
     attach_folder: Optional[Callable[[str], dict]] = None
     default_projects_dir: Optional[Callable[[], str]] = None
     open_assets: Optional[Callable[[], None]] = None
@@ -48,8 +44,8 @@ class ChatTab:
         self.parent_widget = parent_widget
         self.ctx = context or ContextManager()
         self.services = services or ChatServices()
-        self.engine = HybridEngine(self.ctx)
-        self.engine_name = "Hybrid (local rules + MCP)"
+        self.engine = WebHybridEngine(self.ctx)
+        self.engine_name = "Web Agent (HTML/JS/CSS + MCP)"
         self._queue: queue.Queue = queue.Queue()
         self._pending_project: dict[str, Any] | None = None
         self._busy = False
@@ -60,11 +56,8 @@ class ChatTab:
         Entry = ctk.CTkEntry if USE_CTK else ctk.Entry
 
         self.frame = Frame(parent_widget, corner_radius=8) if USE_CTK else Frame(parent_widget)
-        Label(self.frame, text="Chat", font=("Segoe UI", 14, "bold")).pack(
-            anchor="w", padx=10, pady=(10, 2))
-
-        self.status_lbl = Label(self.frame, text="", anchor="w", font=("Segoe UI", 10),
-                                justify="left", wraplength=480)
+        Label(self.frame, text="Web App Chat", font=("Segoe UI", 14, "bold")).pack(anchor="w", padx=10, pady=(10, 2))
+        self.status_lbl = Label(self.frame, text="", anchor="w", font=("Segoe UI", 10), justify="left", wraplength=480)
         self.status_lbl.pack(fill="x", padx=10, pady=(0, 4))
 
         mode_row = Frame(self.frame, fg_color="transparent") if USE_CTK else Frame(self.frame)
@@ -74,8 +67,7 @@ class ChatTab:
             b = Button(mode_row, text=m, width=110, command=lambda mode=m: self.set_mode(mode))
             b.pack(side="left", padx=2)
             self._mode_buttons[m] = b
-        Button(mode_row, text="Attach Folder", width=110, command=self.attach_folder).pack(
-            side="right", padx=2)
+        Button(mode_row, text="Attach Folder", width=110, command=self.attach_folder).pack(side="right", padx=2)
 
         if USE_CTK:
             self.history = ctk.CTkTextbox(self.frame, font=("Consolas", 12), wrap="word")
@@ -83,10 +75,7 @@ class ChatTab:
             from tkinter import scrolledtext
             self.history = scrolledtext.ScrolledText(self.frame, font=("Consolas", 12), wrap="word")
         self.history.pack(fill="both", expand=True, padx=8, pady=6)
-        self.history.insert(
-            "end",
-            "JuprisX Agent online. Contoh: halo | bikin game tebak warna | "
-            "scan project | generate keystore | cek env\n\n")
+        self.history.insert("end", "JuprisX Web Agent online. Contoh: bikin game platformer HTML5 | buat dashboard offline | generate icon | build AAB\n\n")
 
         input_row = Frame(self.frame, fg_color="transparent") if USE_CTK else Frame(self.frame)
         input_row.pack(fill="x", padx=8, pady=(0, 10))
@@ -101,20 +90,12 @@ class ChatTab:
         self.frame.after(100, self._poll)
         threading.Thread(target=self._ping_bg, daemon=True).start()
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
     def set_mode(self, mode: str):
         if self.ctx.set_mode(mode):
             self._refresh_mode_buttons()
             self.display_status()
-            hint = {"General Chat": "diskusi bebas.",
-                    "Project Context": "AI melihat project aktif.",
-                    "New Project": "bilang apa game yang mau dibuat."}[mode]
-            self.receive_message(f"[system] Mode: {mode} - {hint}")
 
     def set_project(self, project: dict | None):
-        """Called by the app when the selected project changes."""
         self.ctx.set_project(project)
         if project and self.ctx.mode == "General Chat":
             self.ctx.set_mode("Project Context")
@@ -135,11 +116,9 @@ class ChatTab:
         if working_dir:
             self.set_working_dir(working_dir)
             return
-        link = "● MCP online" if self.engine.mcp_online else "○ MCP offline (local)"
+        link = "● MCP online" if self.engine.mcp_online else "○ MCP offline"
         proj = self.ctx.project.get("name") if self.ctx.project else "-"
-        self.status_lbl.configure(
-            text=f"{link}  |  Engine: {self.engine_name}\n"
-                 f"Project: {proj}  |  Dir: {self.ctx.active_working_dir or '(none)'}")
+        self.status_lbl.configure(text=f"{link}  |  Engine: {self.engine_name}\nProject: {proj}  |  Dir: {self.ctx.active_working_dir or '(none)'}")
 
     def send_message(self, message: str):
         message = (message or "").strip()
@@ -168,25 +147,22 @@ class ChatTab:
             return
         try:
             project = self.services.attach_folder(folder)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.receive_message(f"Gagal attach folder: {exc}")
             return
         self.set_project(project)
         self.receive_message(f"Project **{project['name']}** aktif. Dir: {project['working_dir']}")
 
-    # ------------------------------------------------------------------
-    # Worker thread -> UI thread via queue
-    # ------------------------------------------------------------------
     def _worker(self, message: str):
         try:
             reply = self.engine.handle(message)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             reply = Reply(f"Error: {exc}")
         self._queue.put(reply)
 
     def _ping_bg(self):
         self.engine.ping()
-        self._queue.put(None)  # status refresh
+        self._queue.put(None)
 
     def _poll(self):
         try:
@@ -204,14 +180,9 @@ class ChatTab:
             pass
         self.frame.after(100, self._poll)
 
-    # ------------------------------------------------------------------
-    # Actions
-    # ------------------------------------------------------------------
     def _run_action(self, reply: Reply):
         sv = self.services
-        mapping = {"scan": sv.scan, "keystore": sv.keystore, "build": sv.build,
-                   "assets": sv.open_assets, "setup_env": sv.setup_env,
-                   "auto_fix": sv.auto_fix}
+        mapping = {"scan": sv.scan, "keystore": sv.keystore, "build": sv.build, "assets": sv.open_assets, "setup_env": sv.setup_env, "auto_fix": sv.auto_fix}
         if reply.action in mapping:
             fn = mapping[reply.action]
             if fn:
@@ -232,16 +203,13 @@ class ChatTab:
     def _pick_folder(self):
         from tkinter import filedialog
         initial = self.services.default_projects_dir() if self.services.default_projects_dir else None
-        folder = filedialog.askdirectory(title="Simpan project di folder mana?",
-                                         initialdir=initial, mustexist=False)
+        folder = filedialog.askdirectory(title="Simpan project di folder mana?", initialdir=initial, mustexist=False)
         if folder:
             self._create_in(folder)
         else:
-            self.receive_message("Belum ada folder. Ketik *simpan di default*, "
-                                 "ketik path folder, atau *batal*.")
+            self.receive_message("Belum ada folder. Ketik *simpan di default*, path folder, atau *batal*.")
 
     def _handle_pending(self, message: str) -> bool:
-        """While a generated project waits for a folder, interpret the reply."""
         low = message.lower()
         if re.search(r"\b(batal|cancel)\b", low):
             self._pending_project = None
@@ -258,7 +226,7 @@ class ChatTab:
         if candidate.is_absolute():
             self._create_in(str(candidate))
             return True
-        return False  # normal chat message; project stays pending
+        return False
 
     def _create_in(self, folder: str, force_subfolder: bool = False):
         data = self._pending_project
@@ -268,22 +236,18 @@ class ChatTab:
             self.receive_message("Penyimpanan project belum tersambung ke app.")
             return
         target = Path(folder).expanduser()
-        # Put files in a fresh subfolder unless the chosen folder is new/empty.
         if force_subfolder or (target.exists() and any(target.iterdir())):
-            target = self._unique_dir(target / data.get("slug", "pygame-game"))
+            target = self._unique_dir(target / data.get("slug", "html5-app"))
         try:
             project = self.services.create_project(data["name"], str(target), data["files"])
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.receive_message(f"Gagal menyimpan project: {exc}")
             return
         self._pending_project = None
         self.set_project(project)
         self.ctx.set_mode("Project Context")
         self._refresh_mode_buttons()
-        self.display_status()
-        self.receive_message(
-            f"Project **{project['name']}** disimpan di `{project['working_dir']}` "
-            "dan masuk Project Table. Ketik *scan project* untuk cek compatibility.")
+        self.receive_message(f"Project **{project['name']}** disimpan di `{project['working_dir']}`. Ketik *scan project* untuk validasi.")
 
     @staticmethod
     def _unique_dir(path: Path) -> Path:
@@ -294,9 +258,6 @@ class ChatTab:
             i += 1
         return path.parent / f"{path.name}-{i}"
 
-    # ------------------------------------------------------------------
-    # UI helpers
-    # ------------------------------------------------------------------
     def _append(self, text: str):
         self.history.insert("end", text)
         self.history.see("end")

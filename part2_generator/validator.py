@@ -7,35 +7,37 @@ from core_engine.web_validator import WebValidator
 
 
 class Validator:
-    """Deterministic validation for generated HTML/JS Android WebView projects."""
+    """Deterministic validation for HTML/JS/CSS Android WebView projects."""
 
     def __init__(self, project_path: str, expected_python: str | None = None,
                  env_status: dict[str, Any] | None = None):
         self.project_path = Path(project_path).expanduser().resolve()
+        self.env_status = env_status or {}
 
     def _web(self) -> dict[str, Any]:
         return WebValidator(str(self.project_path)).validate()
 
     def validate_syntax(self) -> bool:
-        result = self._web()
-        return not any(f["code"] in {"MANIFEST_JSON", "BROKEN_ASSET", "MISSING_ENTRY"} for f in result["findings"])
+        findings = self._web()["findings"]
+        return not any(f["code"] in {"MANIFEST_JSON", "BROKEN_ASSET", "MISSING_ENTRY"} for f in findings)
 
     def validate_imports(self) -> bool:
-        return not any(f["code"] == "REMOTE_DEPENDENCY" for f in self._web()["findings"])
+        findings = self._web()["findings"]
+        return not any(f["code"] in {"REMOTE_DEPENDENCY", "REMOTE_SCRIPT"} for f in findings)
 
     def validate_dependencies(self) -> bool:
         findings = self._web()["findings"]
-        return not any(f["code"] in {"REMOTE_DEPENDENCY", "REMOTE_SCRIPT", "INSECURE_RESOURCE"} for f in findings)
+        return not any(f["code"] in {"REMOTE_DEPENDENCY", "REMOTE_SCRIPT", "INSECURE_RESOURCE", "REMOTE_OR_FILE_URL"} for f in findings)
+
+    def validate_web(self) -> bool:
+        return not any(f["severity"] == "HIGH" for f in self._web()["findings"])
 
     def validate_builder_constraints(self) -> bool:
-        findings = self._web()["findings"]
-        return not any(f["severity"] == "HIGH" for f in findings)
+        return self.validate_web()
 
     def validate_wsl(self) -> bool:
-        return True
-
-    def validate_pygame(self) -> bool:
-        return True
+        # Environment is checked by the build layer; source validation must remain runnable offline.
+        return bool(self.env_status.get("ready", True))
 
     def unresolved_imports(self) -> list[dict[str, Any]]:
         return []
@@ -46,11 +48,10 @@ class Validator:
         results = {
             "syntax": self.validate_syntax(),
             "imports": self.validate_imports(),
-            "pygame": True,
-            "wsl": True,
-            "builder": not high,
-            "dependencies": self.validate_dependencies(),
             "web": not high,
+            "dependencies": self.validate_dependencies(),
+            "builder": not high,
+            "wsl": self.validate_wsl(),
         }
         results["passed"] = all(results.values())
         results["findings"] = web["findings"]

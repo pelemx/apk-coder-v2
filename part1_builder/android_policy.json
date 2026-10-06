@@ -1,16 +1,12 @@
 {
   "target_api": 36,
-  "min_api": 24,
-  "python_version": "3.11.9",
-  "archs": [
-    "arm64-v8a",
-    "armeabi-v7a"
-  ],
+  "min_api": 35,
+  "compile_sdk": 36,
   "artifact": "aab",
-  "pygame_version": "2.6.1",
-  "cython_version": "3.0.12",
-  "ndk_version": "28c",
+  "architectures": ["arm64-v8a", "x86_64"],
+  "web_runtime": "androidx.webkit",
+  "offline_first": true,
   "page_size_16k": true,
-  "checked_on": "2026-10-05",
-  "source": "Google Play target API 36 policy + Android 16 KB page-size guidance"
+  "checked_on": "2026-10-06",
+  "source": "Native Android WebView + Gradle policy"
 }

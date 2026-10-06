@@ -3,7 +3,7 @@ from __future__ import annotations
 
 
 def build_template(name: str) -> dict[str, str]:
-    """Return a complete offline-first HTML5 starter project."""
+    """Return a complete offline-first HTML5 starter project under web/."""
     title = (name or "HTML5 Game").strip().title()
     safe = title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
     html = f'''<!doctype html>
@@ -53,4 +53,4 @@ window.addEventListener("popstate", () => {});
 '''
     import json
     manifest = json.dumps({"name": title, "short_name": title[:30], "start_url": "./index.html", "display": "standalone", "background_color": "#181a21", "theme_color": "#181a21"}, ensure_ascii=False, indent=2) + "\n"
-    return {"index.html": html, "app.js": js, "style.css": css, "manifest.json": manifest, "assets/.gitkeep": ""}
+    return {"web/index.html": html, "web/app.js": js, "web/style.css": css, "web/manifest.json": manifest, "web/assets/.gitkeep": ""}

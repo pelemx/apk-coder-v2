@@ -49,6 +49,8 @@ class ChatTab:
         self._queue: queue.Queue = queue.Queue()
         self._pending_project: dict[str, Any] | None = None
         self._busy = False
+        self._req_gen = 0
+        self._active_gen = 0
 
         Frame = ctk.CTkFrame if USE_CTK else ctk.Frame
         Label = ctk.CTkLabel if USE_CTK else ctk.Label
@@ -105,7 +107,11 @@ class ChatTab:
         self._append(f"You: {message}\n")
         if self._pending_project and self._handle_pending(message): return
         if self._busy: self.receive_message("Masih memproses pesan sebelumnya, tunggu sebentar."); return
-        self._busy = True; self._set_sending(True); threading.Thread(target=self._worker, args=(message,), daemon=True).start()
+        self._busy = True; self._set_sending(True)
+        self._req_gen += 1
+        gen = self._req_gen
+        self._active_gen = gen
+        threading.Thread(target=self._worker, args=(message, gen), daemon=True).start()
 
     def receive_message(self, message: str): self._append(f"AI: {message}\n\n")
 
@@ -118,10 +124,10 @@ class ChatTab:
         except Exception as exc: self.receive_message(f"Gagal attach folder: {exc}"); return
         self.set_project(project); self.receive_message(f"Project **{project['name']}** aktif. Dir: {project['working_dir']}")
 
-    def _worker(self, message: str):
+    def _worker(self, message: str, gen: int):
         try: reply = self.engine.handle(message)
         except Exception as exc: reply = Reply(f"Error: {exc}")
-        self._queue.put((reply, message))
+        self._queue.put((reply, message, gen))
 
     def _ping_bg(self): self.engine.ping(); self._queue.put(None)
 
@@ -131,7 +137,9 @@ class ChatTab:
                 item = self._queue.get_nowait()
                 if item is None: self.display_status()
                 else:
-                    reply, source_prompt = item
+                    reply, source_prompt, gen = item
+                    if gen != self._active_gen:
+                        continue
                     self._busy = False; self._set_sending(False); self.receive_message(reply.text); self.display_status(); self._run_action(reply, source_prompt)
         except queue.Empty: pass
         self.frame.after(100, self._poll)

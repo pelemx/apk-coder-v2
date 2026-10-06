@@ -22,6 +22,14 @@ Return JSON {files:[{path,content}]} using paths under web/.
         name = re.sub(r"^(game|pygame)\s+", "", name, flags=re.I)
         return name[:60] or "HTML5 Game"
 
+    def detect_action(self, prompt: str) -> str:
+        """Give web-game generation precedence over all environment/build actions."""
+        p = prompt.lower().strip()
+        make_game = re.search(r"\b(bikin\w*|buat\w*|generate|create|make|tulis\w*|coding\w*)\b", p)
+        if make_game and (re.search(r"\b(game|pygame|permainan)\b", p) or "tebak" in p or "snake" in p):
+            return "generate_game"
+        return super().detect_action(prompt)
+
     @staticmethod
     def _slug_web(name: str) -> str:
         return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "html5-app"

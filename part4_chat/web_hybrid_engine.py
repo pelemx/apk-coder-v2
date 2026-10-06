@@ -15,6 +15,11 @@ never use CDN/http resources. Include a mobile viewport meta tag and touch-frien
 Return JSON {files:[{path,content}]} using paths under web/.
 """
 
+    _LEGACY_MARKERS = (
+        "pygame", "pygame-ce", "python-for-android", "buildozer",
+        "pip install pygame", "pip install pygame-ce", "import pygame",
+    )
+
     @staticmethod
     def extract_game_name(prompt: str) -> str:
         m = re.search(r"(?:bikin|buat|generate|create|make)\s+(?:sebuah\s+)?(?:game\s+)?(.+)", prompt, re.I)
@@ -34,22 +39,64 @@ Return JSON {files:[{path,content}]} using paths under web/.
     def _slug_web(name: str) -> str:
         return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "html5-app"
 
+    @classmethod
+    def _is_legacy_output(cls, files: dict[str, str]) -> bool:
+        for path, content in files.items():
+            if path.lower().endswith((".py", ".pyw")):
+                return True
+            sample = str(content).lower()
+            if any(marker in sample for marker in cls._LEGACY_MARKERS):
+                return True
+        return False
+
+    def _parse_web_response(self, text: str) -> dict[str, str]:
+        parsed = self.parse_files(text)
+        files = {k if k.startswith("web/") else "web/" + k: v for k, v in parsed.items()}
+        if self._is_legacy_output(files) or "web/index.html" not in files:
+            return {}
+        return files
+
     def _do_generate(self, prompt: str) -> Reply:
-        name = self.extract_game_name(prompt); files, source = {}, "template lokal"
-        text = self._call_mcp(self.WEB_CONTRACT + "\nUser request:\n" + prompt, "ask_guidance", timeout=self.cfg["mcp_timeout_generate"], include_sources=False)
+        name = self.extract_game_name(prompt)
+        files, source = {}, "template lokal"
+        request = self.WEB_CONTRACT + "\nUser request:\n" + prompt
+        text = self._call_mcp(request, "ask_guidance", timeout=self.cfg["mcp_timeout_generate"], include_sources=False)
         if text:
-            parsed = self.parse_files(text)
-            files = {k if k.startswith("web/") else "web/" + k: v for k, v in parsed.items() if not k.lower().endswith((".py", ".pyw"))}
-            if "web/index.html" in files: source = "MCP / Jupris"
-            else: files = {}
-        if not files: files = build_template(name)
-        return Reply(f"Web app **{name}** siap ({source}). File: {', '.join(sorted(files))}.\nMau simpan di folder mana? Pilih folder, atau ketik *simpan di default*.", action="create_project", data={"name": name.title(), "slug": self._slug_web(name), "files": files, "source": source})
+            files = self._parse_web_response(text)
+
+        # MCP/provider may still return the retired Pygame contract. Never let that
+        # payload reach create_project: retry once with an explicit correction, then
+        # fall back to the known-good HTML template.
+        if not files and text:
+            retry = (
+                self.WEB_CONTRACT
+                + "\nINVALID PREVIOUS RESPONSE: it contained Python/Pygame or did not contain web/index.html."
+                + "\nDiscard it completely. Return ONLY a complete HTML/CSS/JS web project."
+                + "\nUser request:\n" + prompt
+            )
+            retry_text = self._call_mcp(retry, "ask_guidance", timeout=self.cfg["mcp_timeout_generate"], include_sources=False)
+            if retry_text:
+                files = self._parse_web_response(retry_text)
+
+        if files:
+            source = "MCP / Jupris"
+        else:
+            files = build_template(name)
+
+        return Reply(
+            f"Web app **{name}** siap ({source}). File: {', '.join(sorted(files))}.\nMau simpan di folder mana? Pilih folder, atau ketik *simpan di default*.",
+            action="create_project",
+            data={"name": name.title(), "slug": self._slug_web(name), "files": files, "source": source},
+        )
 
     def make_fix_provider(self):
         def provider(prompt: str) -> dict:
             text = self._call_mcp(self.WEB_CONTRACT + "\nFix only these findings:\n" + prompt, "request_patch", timeout=self.cfg["mcp_timeout_generate"], include_sources=True)
             if not text: return {}
-            return {k if k.startswith("web/") else "web/" + k: v for k, v in self.parse_files(text).items() if not k.lower().endswith((".py", ".pyw"))}
+            files = {k if k.startswith("web/") else "web/" + k: v for k, v in self.parse_files(text).items()}
+            if self._is_legacy_output(files):
+                return {}
+            return files
         return provider
 
     def _do_check_env(self, _prompt: str) -> Reply:

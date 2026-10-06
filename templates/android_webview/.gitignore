@@ -1,0 +1,6 @@
+signing/
+*.jks
+*.keystore
+.gradle/
+build/
+app/build/

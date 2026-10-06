@@ -59,14 +59,13 @@ class GradleBuilder:
         return f"/mnt/{win[0].lower()}/{win[2:].lstrip('/')}"
 
     def _wsl_toolchain(self) -> str:
-        """Return a minimal Linux toolchain bootstrap command.
-
-        The command deliberately avoids inheriting the huge Windows PATH from WSL.
-        """
+        """Bootstrap the complete Linux-side Android build toolchain."""
         gradle_root = f"$HOME/.juprisx/tools/gradle-{self.GRADLE_VERSION}"
+        sdk_root = "$HOME/Android/Sdk"
+        cmdline_root = "$HOME/.juprisx/tools/cmdline-tools"
         return (
             "set -e; "
-            "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; "
+            'export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"; '
             "if ! command -v java >/dev/null 2>&1; then "
             "sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openjdk-21-jdk unzip curl; "
             "fi; "
@@ -77,11 +76,22 @@ class GradleBuilder:
             "unzip -q $HOME/.juprisx/tools/gradle.zip -d $HOME/.juprisx/tools; "
             "rm -f $HOME/.juprisx/tools/gradle.zip; "
             "fi; "
-            f"export PATH={gradle_root}/bin:$PATH; "
-            "export JAVA_HOME=${JAVA_HOME:-$(dirname $(dirname $(readlink -f $(command -v java))))}; "
-            "export ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}; "
+            f'export PATH="{gradle_root}/bin:$PATH"; '
+            'export JAVA_HOME="${JAVA_HOME:-$(dirname $(dirname $(readlink -f $(command -v java))))}"; '
+            f'export ANDROID_SDK_ROOT="${{ANDROID_SDK_ROOT:-{sdk_root}}}"; '
+            'export ANDROID_HOME="$ANDROID_SDK_ROOT"; '
+            'if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then '
+            f'mkdir -p "$HOME/.juprisx/tools" "$ANDROID_SDK_ROOT" "{cmdline_root}"; '
+            f'curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o "$HOME/.juprisx/tools/cmdline-tools.zip"; '
+            f'rm -rf "{cmdline_root}/latest"; mkdir -p "{cmdline_root}/latest"; '
+            f'unzip -q "$HOME/.juprisx/tools/cmdline-tools.zip" -d "{cmdline_root}"; '
+            f'rm -f "$HOME/.juprisx/tools/cmdline-tools.zip"; '
+            f'mv "{cmdline_root}/cmdline-tools/"* "{cmdline_root}/latest/"; rmdir "{cmdline_root}/cmdline-tools"; '
+            "fi; "
+            'export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"; '
+            'yes | sdkmanager --licenses >/dev/null 2>&1 || true; '
+            'sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"; '
         )
-
     def _ensure_wrapper(self) -> Path | str | None:
         bat = self.android_dir / "gradlew.bat"
         unix = self.android_dir / "gradlew"
@@ -97,10 +107,10 @@ class GradleBuilder:
                 return bat if os.name == "nt" and bat.exists() else unix
         if os.name == "nt":
             try:
-                from part1_builder.wsl_connector import run_command
+                from part1_builder.wsl_connector import run_script
                 wsl_dir = self._wsl_dir()
-                script = self._wsl_toolchain() + "cd -- \"$1\"; gradle wrapper --gradle-version " + self.GRADLE_VERSION
-                rc, out, err = run_command(script, args=[wsl_dir], timeout=900)
+                script = self._wsl_toolchain() + f"cd -- {self._quote(wsl_dir)}; gradle wrapper --gradle-version {self.GRADLE_VERSION}"
+                rc, out, err = run_script(script, timeout=900)
                 if rc == 0 and unix.exists():
                     self.log("[gradle] wrapper generated through WSL")
                     return unix
@@ -110,19 +120,18 @@ class GradleBuilder:
         return None
 
     def _build_wsl(self, artifact: str) -> dict:
-        from part1_builder.wsl_connector import run_command
+        from part1_builder.wsl_connector import run_script
         wsl_dir = self._wsl_dir()
         tasks = []
         if artifact in {"apk", "both"}: tasks.append(("apk", "assembleRelease"))
         if artifact in {"aab", "both"}: tasks.append(("aab", "bundleRelease"))
         if not tasks:
             raise ValueError(f"Unsupported artifact: {artifact}")
-        gradle_root = f"$HOME/.juprisx/tools/gradle-{self.GRADLE_VERSION}"
-        env_setup = self._wsl_toolchain() + f"cd -- \"$1\"; if [ ! -x ./gradlew ]; then gradle wrapper --gradle-version {self.GRADLE_VERSION}; fi; "
+        env_setup = self._wsl_toolchain() + f"cd -- {self._quote(wsl_dir)}; if [ ! -x ./gradlew ]; then gradle wrapper --gradle-version {self.GRADLE_VERSION}; fi; "
         outputs = {}
         for kind, task in tasks:
             self.log(f"[WSL/gradle] {task}")
-            rc, out, err = run_command(env_setup + f"./gradlew {task}", args=[wsl_dir], timeout=1800)
+            rc, out, err = run_script(env_setup + f"./gradlew {task}", timeout=1800)
             if rc != 0:
                 raise RuntimeError(f"WSL Gradle {task} failed:\n{out[-4000:]}\n{err[-4000:]}")
             ext = "apk" if kind == "apk" else "aab"

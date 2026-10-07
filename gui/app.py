@@ -402,6 +402,22 @@ class AppWindow(ctk.CTk if USE_CTK else ctk.Tk):
             self.pm.record_build(project, result)
             self._show_project(project)
             self.log_panel.log(f"Build {result['status']}: {result.get('message', '')}")
+            if result.get("status") == "success":
+                project_dir = Path(project["working_dir"]).resolve()
+                web_dir = project_dir / "web"
+                artifacts = []
+                if result.get("apk"):
+                    artifacts.append(f"APK: {Path(result['apk']).resolve()}")
+                if result.get("aab"):
+                    artifacts.append(f"AAB: {Path(result['aab']).resolve()}")
+                self._notify(
+                    "BUILD SELESAI.\n"
+                    f"App source/edit: {web_dir}\n"
+                    + ("\n".join(artifacts) if artifacts else "Artifact tidak ditemukan.")
+                    + "\n\nEdit game/app di folder \`web/\`, lalu build APK/AAB lagi."
+                )
+            else:
+                self._notify(f"BUILD GAGAL.\n{result.get('message', 'Lihat Log untuk detail error.')}")
 
         self._run_bg(work, done)
         

@@ -42,11 +42,12 @@ class FindingsPanel:
         )
 
         if USE_CTK:
-            self.text = ctk.CTkTextbox(self.frame, height=120, font=("Consolas", 11))
+            # Pangkas tinggi textbox dari 120 menjadi 60
+            self.text = ctk.CTkTextbox(self.frame, height=60, font=("Consolas", 11))
             self.text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         else:
             from tkinter import scrolledtext
-            self.text = scrolledtext.ScrolledText(self.frame, height=6, font=("Consolas", 11))
+            self.text = scrolledtext.ScrolledText(self.frame, height=4, font=("Consolas", 11))
             self.text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
         self.set_findings([])
@@ -79,11 +80,12 @@ class DiffPanel:
         )
 
         if USE_CTK:
-            self.text = ctk.CTkTextbox(self.frame, height=120, font=("Consolas", 11))
+            # Pangkas tinggi textbox dari 120 menjadi 60
+            self.text = ctk.CTkTextbox(self.frame, height=60, font=("Consolas", 11))
             self.text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         else:
             from tkinter import scrolledtext
-            self.text = scrolledtext.ScrolledText(self.frame, height=6, font=("Consolas", 11))
+            self.text = scrolledtext.ScrolledText(self.frame, height=4, font=("Consolas", 11))
             self.text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
         self.show_diff("", "")
@@ -113,18 +115,20 @@ class LogPanel:
         Label = ctk.CTkLabel if USE_CTK else ctk.Label
 
         self.frame = Frame(parent, corner_radius=8) if USE_CTK else Frame(parent)
-        self.frame.pack(fill="x", padx=4, pady=4)
+        # Paksa frame untuk mengisi ruang vertikal yang didapat
+        self.frame.pack(fill="both", expand=False, padx=4, pady=4)
 
         Label(self.frame, text="Log", font=("Segoe UI", 14, "bold")).pack(
             anchor="w", padx=8, pady=(8, 4)
         )
 
         if USE_CTK:
-            self.text = ctk.CTkTextbox(self.frame, height=200, font=("Consolas", 11))
+            # Pertahankan nilai height tinggi agar proporsional
+            self.text = ctk.CTkTextbox(self.frame, height=220, font=("Consolas", 11))
             self.text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         else:
             from tkinter import scrolledtext
-            self.text = scrolledtext.ScrolledText(self.frame, height=12, font=("Consolas", 11))
+            self.text = scrolledtext.ScrolledText(self.frame, height=14, font=("Consolas", 11))
             self.text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
         self.log("JuprisX ready.")
@@ -230,6 +234,7 @@ class AppWindow(ctk.CTk if USE_CTK else ctk.Tk):
             open_assets=self.open_assets_window,
             setup_env=self.setup_environment,
             auto_fix=lambda: self._with_project(self.auto_fix_project),
+            record_asset=lambda project, kind, path: self.pm.record_asset(project, kind, path),
         )
         self.chat_tab = ChatTab(right, context=ContextManager(), services=services)
         self.chat_tab.frame.pack(fill="both", expand=True)
@@ -405,7 +410,7 @@ class AppWindow(ctk.CTk if USE_CTK else ctk.Tk):
         self.after(0, lambda: self.log_panel.log(line))
 
     def setup_environment(self):
-        """Explicit-only environment setup; never called by keystore/build."""
+        """Self-heal the WSL build environment (apt packages + Buildozer venv)."""
         self.set_status("● Setting up WSL")
         self._notify("Menyiapkan WSL build environment...")
 

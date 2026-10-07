@@ -28,7 +28,7 @@ class MainActivity : ComponentActivity() {
         webView.settings.domStorageEnabled = true
         webView.settings.allowFileAccess = false
         webView.settings.allowContentAccess = false
-        webView.loadUrl("https://appassets.androidplatform.net/assets/index.html")
+        webView.loadUrl("https://appassets.androidplatform.net/assets/www/index.html")
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() { if (webView.canGoBack()) webView.goBack() else finish() }
         })

@@ -314,6 +314,9 @@ class ProjectManager:
         if kind == "screenshot":
             if rel not in assets["screenshots"]: assets["screenshots"].append(rel)
         elif kind in ("icon", "feature_graphic"): assets[kind] = rel
+        elif kind == "ingame":
+            ingame = assets.setdefault("ingame", [])
+            if rel not in ingame: ingame.append(rel)
         else: raise ValueError(f"Unknown asset kind: {kind}")
         self.save_project(project)
 

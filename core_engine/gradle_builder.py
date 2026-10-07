@@ -58,40 +58,51 @@ class GradleBuilder:
             raise RuntimeError("WSL fallback requires the project to be on a Windows drive.")
         return f"/mnt/{win[0].lower()}/{win[2:].lstrip('/')}"
 
-    def _wsl_toolchain(self) -> str:
-        """Bootstrap the complete Linux-side Android build toolchain."""
-        gradle_root = f"$HOME/.juprisx/tools/gradle-{self.GRADLE_VERSION}"
-        sdk_root = "$HOME/Android/Sdk"
-        cmdline_root = "$HOME/.juprisx/tools/cmdline-tools"
+    # core_engine/gradle_builder.py — _wsl_toolchain(), fixed quoting
+
+    @staticmethod
+    def _wsl_toolchain() -> str:
+        """Return a minimal Linux toolchain bootstrap command.
+
+        The command deliberately avoids inheriting the huge Windows PATH from WSL.
+        Static so part1_builder.wsl_checker can reuse the exact same bootstrap
+        (incl. GRADLE_VERSION) for the "Setup WSL" check/fix action, instead of
+        duplicating/drifting this script.
+        """
+        gradle_root = f"$HOME/.juprisx/tools/gradle-{GradleBuilder.GRADLE_VERSION}"
+        jdk_home = "/usr/lib/jvm/java-1.17.0-openjdk-amd64"
+        sdk_root = "$HOME/.juprisx/tools/android-sdk"
         return (
             "set -e; "
             'export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"; '
-            "if ! command -v java >/dev/null 2>&1; then "
-            "sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openjdk-21-jdk unzip curl; "
+            # Install JDK 17 explicitly and unconditionally (idempotent via apt).
+            # Deriving JAVA_HOME from `command -v java` is unreliable: on this
+            # distro `java` can resolve via update-alternatives to a newer but
+            # broken/headless JDK (seen: java-21-openjdk-amd64 missing javac),
+            # which then fails Gradle's JAVA_COMPILER toolchain check even
+            # though a perfectly good JDK 17 is also installed. Pin to the
+            # known-good JDK 17 path instead of trusting whichever `java` wins.
+            f"if [ ! -x {jdk_home}/bin/javac ]; then "
+            "sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y openjdk-17-jdk unzip curl; "
             "fi; "
             "if [ ! -x " + gradle_root + "/bin/gradle ]; then "
             "mkdir -p $HOME/.juprisx/tools; "
-            f"curl -fsSL https://services.gradle.org/distributions/gradle-{self.GRADLE_VERSION}-bin.zip -o $HOME/.juprisx/tools/gradle.zip; "
+            f"curl -fsSL https://services.gradle.org/distributions/gradle-{GradleBuilder.GRADLE_VERSION}-bin.zip -o $HOME/.juprisx/tools/gradle.zip; "
             "rm -rf $HOME/.juprisx/tools/gradle-*; "
             "unzip -q $HOME/.juprisx/tools/gradle.zip -d $HOME/.juprisx/tools; "
             "rm -f $HOME/.juprisx/tools/gradle.zip; "
             "fi; "
-            f'export PATH="{gradle_root}/bin:$PATH"; '
-            'export JAVA_HOME="${JAVA_HOME:-$(dirname $(dirname $(readlink -f $(command -v java))))}"; '
+            f'export PATH="{gradle_root}/bin:{jdk_home}/bin:$PATH"; '
+            f'export JAVA_HOME="{jdk_home}"; '
+            f'export GRADLE_OPTS="-Dorg.gradle.java.home={jdk_home}"; '
             f'export ANDROID_SDK_ROOT="${{ANDROID_SDK_ROOT:-{sdk_root}}}"; '
             'export ANDROID_HOME="$ANDROID_SDK_ROOT"; '
-            'if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then '
-            f'mkdir -p "$HOME/.juprisx/tools" "$ANDROID_SDK_ROOT" "{cmdline_root}"; '
-            f'curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o "$HOME/.juprisx/tools/cmdline-tools.zip"; '
-            f'rm -rf "{cmdline_root}/latest"; mkdir -p "{cmdline_root}/latest"; '
-            f'unzip -q "$HOME/.juprisx/tools/cmdline-tools.zip" -d "{cmdline_root}"; '
-            f'rm -f "$HOME/.juprisx/tools/cmdline-tools.zip"; '
-            f'mv "{cmdline_root}/cmdline-tools/"* "{cmdline_root}/latest/"; rmdir "{cmdline_root}/cmdline-tools"; '
-            "fi; "
-            'export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"; '
-            'yes | sdkmanager --licenses >/dev/null 2>&1 || true; '
-            'sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"; '
         )
+
+    # core_engine/gradle_builder.py — 2 perbaikan (ganti run_command -> run_script)
+
+    # core_engine/gradle_builder.py — _ensure_wrapper() dan _build_wsl(), stop forwarding path via $1
+
     def _ensure_wrapper(self) -> Path | str | None:
         bat = self.android_dir / "gradlew.bat"
         unix = self.android_dir / "gradlew"
@@ -109,7 +120,13 @@ class GradleBuilder:
             try:
                 from part1_builder.wsl_connector import run_script
                 wsl_dir = self._wsl_dir()
-                script = self._wsl_toolchain() + f"cd -- {self._quote(wsl_dir)}; gradle wrapper --gradle-version {self.GRADLE_VERSION}"
+                # Embed the path directly (quoted) instead of forwarding it as
+                # the $1 positional parameter through wsl.exe's own re-parsing
+                # of the command line: that hop does not reliably preserve a
+                # path containing spaces/parentheses (e.g. "apk-coder-v2-main
+                # (11)"), so `cd` silently landed in the wrong directory
+                # (wsl.exe's default initial CWD) instead of raising.
+                script = self._wsl_toolchain() + f"cd -- {self._quote(wsl_dir)}; gradle wrapper --gradle-version " + self.GRADLE_VERSION
                 rc, out, err = run_script(script, timeout=900)
                 if rc == 0 and unix.exists():
                     self.log("[gradle] wrapper generated through WSL")
@@ -127,11 +144,27 @@ class GradleBuilder:
         if artifact in {"aab", "both"}: tasks.append(("aab", "bundleRelease"))
         if not tasks:
             raise ValueError(f"Unsupported artifact: {artifact}")
-        env_setup = self._wsl_toolchain() + f"cd -- {self._quote(wsl_dir)}; printf 'sdk.dir=%s\\n' "$ANDROID_SDK_ROOT" > local.properties; if [ ! -x ./gradlew ]; then gradle wrapper --gradle-version {self.GRADLE_VERSION}; fi; "
+        # SDK bootstrap + local.properties were only ever done by hand before
+        # a WSL build; wire them in here so every WSL build self-heals a
+        # missing/stale sdk.dir instead of failing with "SDK location not
+        # found" the way the template-generated local.properties did.
+        try:
+            from part1_builder.wsl_checker import prepare_wsl_build
+            if not prepare_wsl_build(wsl_dir, log=self.log):
+                self.log("[gradle] WSL SDK/local.properties prep failed; build will likely fail")
+        except Exception as exc:
+            self.log(f"[gradle] WSL SDK/local.properties prep skipped: {exc}")
+        gradle_root = f"$HOME/.juprisx/tools/gradle-{self.GRADLE_VERSION}"
+        # Same fix as _ensure_wrapper: embed the quoted path directly rather
+        # than relying on wsl.exe forwarding it correctly as $1.
+        env_setup = self._wsl_toolchain() + f"cd -- {self._quote(wsl_dir)}; if [ ! -x ./gradlew ]; then gradle wrapper --gradle-version {self.GRADLE_VERSION}; fi; "
+        # -P flags survive even if gradle.properties in the project template
+        # gets regenerated without android.useAndroidX/enableJetifier.
+        gradle_flags = " -Pandroid.useAndroidX=true -Pandroid.enableJetifier=true"
         outputs = {}
         for kind, task in tasks:
             self.log(f"[WSL/gradle] {task}")
-            rc, out, err = run_script(env_setup + f"./gradlew {task}", timeout=1800)
+            rc, out, err = run_script(env_setup + f"./gradlew {task}{gradle_flags}", timeout=1800)
             if rc != 0:
                 raise RuntimeError(f"WSL Gradle {task} failed:\n{out[-4000:]}\n{err[-4000:]}")
             ext = "apk" if kind == "apk" else "aab"

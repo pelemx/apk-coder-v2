@@ -11,7 +11,9 @@ from typing import Any
 
 MODES = ("General Chat", "Project Context", "New Project")
 EXCLUDES = {".git", "__pycache__", ".venv", "venv", "node_modules",
-            "build", "dist", "cache", ".juprisx", ".buildozer", "bin"}
+            "build", "dist", "cache", ".juprisx", ".buildozer", "bin",
+            "android", "signing", "playstore_assets"}
+WEB_SOURCE_EXT = {".html", ".css", ".js", ".json"}
 
 
 class ContextManager:
@@ -52,23 +54,27 @@ class ContextManager:
         return self.project is not None and bool(self.active_working_dir)
 
     # ---- context for the AI --------------------------------------------
-    def list_python_files(self) -> list[Path]:
+    def list_web_files(self) -> list[Path]:
         if not self.active_working_dir:
             return []
         root = Path(self.active_working_dir)
+        web = root / "web"
+        base = web if web.is_dir() else root
         out = []
-        for p in sorted(root.rglob("*.py")):
+        for p in sorted(base.rglob("*")):
+            if not p.is_file() or p.suffix.lower() not in WEB_SOURCE_EXT:
+                continue
             if any(part in EXCLUDES for part in p.relative_to(root).parts):
                 continue
             out.append(p)
         return out
 
     def collect_sources(self, max_chars: int = 24000) -> dict[str, str]:
-        """Project .py sources (relative path -> text), capped so prompts stay small."""
+        """Project web sources (relative path -> text), capped so prompts stay small."""
         root = Path(self.active_working_dir) if self.active_working_dir else None
         sources: dict[str, str] = {}
         used = 0
-        for p in self.list_python_files():
+        for p in self.list_web_files():
             try:
                 text = p.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
@@ -83,16 +89,13 @@ class ContextManager:
         ctx: dict[str, Any] = {
             "mode": self.mode,
             "working_dir": self.active_working_dir,
-            # ATURAN PAKSAAN UNTUK ANDROID PYGAME
             "builder_rules": [
-                "CRITICAL: NEVER use pygame.SCALED. Use pygame.display.set_mode((WIDTH, HEIGHT)) only.",
-                "CRITICAL: NEVER use 'if __name__ == \"__main__\":'. Call main() directly at the end of the file.",
-                "No Windows-only APIs", 
-                "No host-installed fonts (no SysFont, use pygame.font.Font(None, size))",
-                "No hardcoded absolute paths", 
-                "Use project-relative assets",
-                "Handle android back button: if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE: running = False",
-                "Do not modify the builder",
+                "Output is an offline-first HTML5/CSS/JavaScript app inside an Android WebView.",
+                "Entry point is web/index.html; code lives under web/ (index.html, style.css, app.js).",
+                "All resources are local relative paths; no CDN, http(s):// or file:// URLs.",
+                "Mobile-first: viewport meta tag, touch + pointer controls, responsive canvas.",
+                "Images live in web/assets/images/ and are referenced as assets/images/<name>.png; code must still work if an image fails to load.",
+                "Do not modify the Android builder/container.",
             ],
         }
         if self.project and self.mode != "General Chat":

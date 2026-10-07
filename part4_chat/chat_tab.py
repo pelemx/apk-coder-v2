@@ -36,6 +36,7 @@ class ChatServices:
     open_assets: Optional[Callable[[], None]] = None
     setup_env: Optional[Callable[[], None]] = None
     auto_fix: Optional[Callable[[], None]] = None
+    record_asset: Optional[Callable[[dict, str, str], None]] = None
 
 
 class ChatTab:
@@ -45,7 +46,7 @@ class ChatTab:
         self.ctx = context or ContextManager()
         self.services = services or ChatServices()
         self.engine = WebHybridEngine(self.ctx)
-        self.engine_name = "Web Hybrid (HTML/JS + MCP)"
+        self.engine_name = "Web Hybrid (HTML/JS + Bridge/MCP)"
         self._queue: queue.Queue = queue.Queue()
         self._pending_project: dict[str, Any] | None = None
         self._busy = False
@@ -97,7 +98,9 @@ class ChatTab:
     def display_status(self, engine: str | None = None, working_dir: str | None = None):
         if engine: self.engine_name = engine
         if working_dir: self.set_working_dir(working_dir); return
-        link = "● MCP online" if self.engine.mcp_online else "○ MCP offline (local)"
+        if self.engine.bridge_online: link = "● AI online (bridge /chat)"
+        elif self.engine.mcp_online: link = "● AI online (MCP)"
+        else: link = "○ AI offline (perintah lokal saja)"
         proj = self.ctx.project.get("name") if self.ctx.project else "-"
         self.status_lbl.configure(text=f"{link}  |  Engine: {self.engine_name}\nProject: {proj}  |  Dir: {self.ctx.active_working_dir or '(none)'}")
 
@@ -107,10 +110,8 @@ class ChatTab:
         self._append(f"You: {message}\n")
         if self._pending_project and self._handle_pending(message): return
         if self._busy: self.receive_message("Masih memproses pesan sebelumnya, tunggu sebentar."); return
+        self._req_gen += 1; gen = self._req_gen; self._active_gen = gen
         self._busy = True; self._set_sending(True)
-        self._req_gen += 1
-        gen = self._req_gen
-        self._active_gen = gen
         threading.Thread(target=self._worker, args=(message, gen), daemon=True).start()
 
     def receive_message(self, message: str): self._append(f"AI: {message}\n\n")
@@ -135,22 +136,29 @@ class ChatTab:
         try:
             while True:
                 item = self._queue.get_nowait()
-                if item is None: self.display_status()
-                else:
-                    reply, source_prompt, gen = item
-                    if gen != self._active_gen:
-                        continue
-                    self._busy = False; self._set_sending(False); self.receive_message(reply.text); self.display_status(); self._run_action(reply, source_prompt)
+                if item is None: self.display_status(); continue
+                if isinstance(item[0], str):
+                    if item[0] == "say": self.receive_message(item[1])
+                    elif item[0] == "assets_done": self._assets_done(item[1], item[2])
+                    continue
+                reply, source_prompt, gen = item
+                if gen != self._active_gen:
+                    # A newer message was sent while this one was still in
+                    # flight. Its reply/action belongs to a stale request and
+                    # must never be shown or executed.
+                    continue
+                self._busy = False; self._set_sending(False)
+                self.receive_message(reply.text); self.display_status()
+                self._run_action(reply, source_prompt, gen)
         except queue.Empty: pass
         self.frame.after(100, self._poll)
 
     def _action_matches_prompt(self, reply: Reply, source_prompt: str) -> bool:
         """Strictly bind executable actions to the originating user command."""
+        if reply.action is None:
+            return True   # plain text reply (chat, help, diagnosis, generation error): nothing to execute
         p = source_prompt.lower().strip()
 
-        # Keystore is a terminal user action. Never allow an environment/setup
-        # action to execute for the same request, even if the intent detector
-        # or an older queued reply misclassifies it.
         if re.search(r"\b(gen(?:erate)?|create|buat|bikin|siapkan|prepare)\b[^\n]*(?:keystore|\.jks|\.keystore)\b", p):
             if reply.action != "keystore":
                 self.receive_message(f"[guard] Ignored '{reply.action}' after keystore request.")
@@ -164,8 +172,14 @@ class ChatTab:
             return False
         return True
 
-    def _run_action(self, reply: Reply, source_prompt: str):
+    def _run_action(self, reply: Reply, source_prompt: str, gen: int):
+        if gen != self._active_gen:
+            return
         if not self._action_matches_prompt(reply, source_prompt):
+            return
+        # CHAT != BUILD, GENERATE != ENVIRONMENT SETUP, KEYSTORE != WSL SETUP.
+        if reply.action in ("setup_env", "build") and self.engine.detect_action(source_prompt) != reply.action:
+            self.receive_message(f"[guard] Ignored '{reply.action}' — not explicitly requested by this message.")
             return
         sv = self.services; mapping = {"scan": sv.scan, "keystore": sv.keystore, "build": sv.build, "assets": sv.open_assets, "setup_env": sv.setup_env, "auto_fix": sv.auto_fix}
         if reply.action in mapping:
@@ -206,6 +220,34 @@ class ChatTab:
         except Exception as exc: self.receive_message(f"Gagal menyimpan project: {exc}"); return
         self._pending_project = None; self.set_project(project); self.ctx.set_mode("Project Context"); self._refresh_mode_buttons(); self.display_status()
         self.receive_message(f"Project **{project['name']}** disimpan di `{project['working_dir']}` dan masuk Project Table. Ketik *scan project* untuk cek compatibility.")
+        self._start_auto_assets(project, data)
+
+    def _start_auto_assets(self, project: dict, data: dict):
+        """Generate the app icon and the images the game asked for, off the UI thread."""
+        if not self.engine.cfg.get("auto_assets", True): return
+        needed = list(data.get("assets_needed") or []); desc = data.get("description", "")
+        self.receive_message("Membuat icon app" + (f" + {len(needed)} gambar game" if needed else "") + " di background ...")
+        def work():
+            try:
+                from part5_assets.auto_assets import generate_project_assets
+                result = generate_project_assets(project, needed, log=lambda m: self._queue.put(("say", "[assets] " + m)), description=desc)
+            except Exception as exc:  # noqa: BLE001
+                self._queue.put(("say", f"[assets] gagal: {exc}")); return
+            self._queue.put(("assets_done", project, result))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _assets_done(self, project: dict, result: dict):
+        rec = self.services.record_asset
+        if rec:
+            try:
+                if result.get("icon"): rec(project, "icon", result["icon"])
+                for path in result.get("ingame", []): rec(project, "ingame", path)
+            except Exception as exc:  # noqa: BLE001
+                self.receive_message(f"[assets] gagal mencatat ke project: {exc}")
+        ph = result.get("placeholders") or []
+        msg = f"Asset selesai: icon + {len(result.get('ingame', []))} gambar game di `web/assets/images/`."
+        if ph: msg += f" Placeholder lokal dipakai untuk: {', '.join(ph)} (server gambar gagal; ulangi lewat tombol Assets)."
+        self.receive_message(msg + " Ketik *scan project*, lalu *compile apk*.")
 
     @staticmethod
     def _unique_dir(path: Path) -> Path:

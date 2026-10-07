@@ -52,6 +52,23 @@ def _rgb_from_node(node: ast.AST) -> tuple[int, int, int] | None:
     return None
 
 
+_HEX_RE = re.compile(r"#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b")
+_RGB_RE = re.compile(r"rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})")
+
+
+def _rgbs_from_text(text: str):
+    """Color literals in CSS/JS/HTML: #rgb, #rrggbb, rgb()/rgba()."""
+    for m in _HEX_RE.finditer(text):
+        h = m.group(1)
+        if len(h) == 3:
+            h = "".join(c * 2 for c in h)
+        yield int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    for m in _RGB_RE.finditer(text):
+        r, g, b = (int(x) for x in m.groups())
+        if max(r, g, b) <= 255:
+            yield r, g, b
+
+
 def name_color(rgb: tuple[int, int, int]) -> str:
     return min(NAMED_COLORS, key=lambda n: sum((a - b) ** 2 for a, b in zip(NAMED_COLORS[n], rgb)))
 
@@ -73,6 +90,22 @@ def extract_dominant_colors(project_dir: str, top: int = 3) -> list[dict[str, An
         for node in ast.walk(tree):
             rgb = _rgb_from_node(node)
             if rgb and not _is_neutral(rgb):
+                counter[rgb] += 1
+
+    # HTML/JS/CSS web projects: scan web/ (or the project root when there is no web/).
+    web = root / "web"
+    base = web if web.is_dir() else root
+    for path in base.rglob("*"):
+        if path.suffix.lower() not in (".css", ".js", ".html") or not path.is_file():
+            continue
+        if any(part in EXCLUDES for part in path.relative_to(root).parts):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        for rgb in _rgbs_from_text(text):
+            if not _is_neutral(rgb):
                 counter[rgb] += 1
 
     # Merge shades that map to the same color name so "top 3" gives distinct hues.

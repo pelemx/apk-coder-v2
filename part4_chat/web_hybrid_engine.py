@@ -356,6 +356,7 @@ OUTPUT FORMAT (strict): one fenced code block per file. The FIRST line inside ea
         reason = ""
 
         for attempt in (1, 2):
+            self._progress(f"Generate attempt {attempt}/2: meminta AI menulis project HTML/CSS/JS...")
             req = request
             if attempt == 2:
                 req += (f"\n\nINVALID PREVIOUS RESPONSE: {reason}. Discard it completely. "
@@ -364,14 +365,17 @@ OUTPUT FORMAT (strict): one fenced code block per file. The FIRST line inside ea
                                   include_sources=False, fresh=True)
             if not text:
                 reason = self.last_error or "tidak ada balasan dari server AI"
+                self._progress(f"AI belum memberi hasil: {reason}")
                 sections.append((f"attempt {attempt}: NO REPLY", reason))
                 break
             sections.append((f"attempt {attempt}: raw reply ({self.llm_source})", text))
+            self._progress("Balasan AI diterima. Memeriksa format dan validasi web project...")
             files = self.parse_web_files(text)
             reason = self._validate_generated(files)
             if not reason:
                 break
             sections.append((f"attempt {attempt}: rejected", reason))
+            self._progress(f"Attempt {attempt} ditolak validator: {reason}. Mencoba ulang...")
             files = {}
 
         log_path = self._save_log(name, sections)
@@ -382,6 +386,7 @@ OUTPUT FORMAT (strict): one fenced code block per file. The FIRST line inside ea
                 "Project TIDAK dibuat (aku tidak lagi memakai template kuis penjumlahan sebagai pengganti).\n"
                 f"Ketik **cek api** untuk diagnosa koneksi AI, lalu ulangi perintahnya.{hint}")
 
+        self._progress(f"Game {name} berhasil dibuat. Menyiapkan project untuk disimpan...")
         assets_needed = self._pop_assets_needed(files)
         extra = ("\nIcon app + gambar game akan digenerate otomatis setelah project disimpan."
                  if self.cfg.get("auto_assets", True) else "")

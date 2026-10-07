@@ -79,6 +79,15 @@ class HybridEngine:
         self.mcp_online: bool = False
         self.last_error: str = ""
         self.mcp = McpClient(self.cfg)
+        self.progress_callback = None
+
+    def _progress(self, message: str) -> None:
+        callback = self.progress_callback
+        if callback:
+            try:
+                callback(message)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Intent detection
@@ -124,6 +133,20 @@ class HybridEngine:
     def handle(self, prompt: str) -> Reply:
         prompt = prompt.strip()
         action = self.detect_action(prompt)
+        labels = {
+            "generate_game": "Membuat game: mengirim permintaan ke AI dan menunggu kode HTML/JS...",
+            "fix": "Meminta AI menganalisis dan menyiapkan patch...",
+            "chat": "AI sedang memproses pertanyaan...",
+            "check_mcp": "Memeriksa koneksi MCP...",
+            "check_env": "Memeriksa environment Android...",
+            "setup_env": "Menyiapkan environment build...",
+            "auto_fix": "Menjalankan auto-fix...",
+            "scan": "Menjalankan scan project...",
+            "keystore": "Menyiapkan proses keystore...",
+            "build": "Menyiapkan build Android...",
+            "assets": "Menyiapkan Play Store assets...",
+        }
+        self._progress(labels.get(action, "AI sedang memproses..."))
         handler = {
             "check_env": self._do_check_env,
             "check_mcp": lambda _p: Reply(self.diagnose()),

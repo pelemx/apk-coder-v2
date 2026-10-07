@@ -112,6 +112,7 @@ class ChatTab:
         if self._busy: self.receive_message("Masih memproses pesan sebelumnya, tunggu sebentar."); return
         self._req_gen += 1; gen = self._req_gen; self._active_gen = gen
         self._busy = True; self._set_sending(True)
+        self.receive_message("Perintah diterima. AI sedang bekerja...")
         threading.Thread(target=self._worker, args=(message, gen), daemon=True).start()
 
     def receive_message(self, message: str): self._append(f"AI: {message}\n\n")
@@ -126,8 +127,15 @@ class ChatTab:
         self.set_project(project); self.receive_message(f"Project **{project['name']}** aktif. Dir: {project['working_dir']}")
 
     def _worker(self, message: str, gen: int):
-        try: reply = self.engine.handle(message)
-        except Exception as exc: reply = Reply(f"Error: {exc}")
+        def progress(text: str):
+            self._queue.put(("say", text, gen))
+        self.engine.progress_callback = progress
+        try:
+            reply = self.engine.handle(message)
+        except Exception as exc:
+            reply = Reply(f"Error: {exc}")
+        finally:
+            self.engine.progress_callback = None
         self._queue.put((reply, message, gen))
 
     def _ping_bg(self): self.engine.ping(); self._queue.put(None)
